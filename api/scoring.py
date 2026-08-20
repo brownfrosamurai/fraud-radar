@@ -1,4 +1,7 @@
-from typing import Literal, Protocol
+from typing import Literal
+
+from api.schemas import ScoreRequest
+from api.serve import BundleScorer, Scorer, load_bundle
 
 Decision = Literal["ALLOW", "REVIEW", "BLOCK"]
 
@@ -11,16 +14,13 @@ def decide(score: float, amount: float) -> Decision:
     return "ALLOW"
 
 
-class HasAmount(Protocol):
-    amount: float
-
-
-def score(transaction: HasAmount) -> float:
-    if transaction.amount > 500:
-        return 0.93
-    if transaction.amount > 100:
-        return 0.55
-    return 0.12
+def score(
+    transaction: ScoreRequest,
+    model: str = "isolation_forest",
+    scorer: Scorer | None = None,
+) -> float:
+    resolved = scorer or BundleScorer(load_bundle())
+    return resolved.score(transaction, model=model)
 
 
 CANNED_EXPLANATION = [

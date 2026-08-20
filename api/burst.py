@@ -5,6 +5,7 @@ from uuid import uuid4
 
 from api.schemas import BurstResponse, Features, ScoreRequest, ScoredTransaction
 from api.scoring import decide, score
+from api.serve import Scorer
 from api.store import InMemoryStore
 
 BURST_SIZE = 50
@@ -27,9 +28,13 @@ class BurstController:
         self,
         store: InMemoryStore,
         clock: Callable[[], datetime],
+        burst_rows: list[ScoreRequest] | None = None,
+        scorer: Scorer | None = None,
     ) -> None:
         self._store = store
         self._clock = clock
+        self._burst_rows = burst_rows
+        self._scorer = scorer
         self._last_burst_at: datetime | None = None
         # Cooldown check + inserts must be one critical section vs concurrent POSTs.
         self._lock = threading.Lock()
@@ -49,7 +54,7 @@ class BurstController:
                     amount=501.0 + i,
                     features=_zero_features(),
                 )
-                model_score = score(req)
+                model_score = score(req, scorer=self._scorer)
                 self._store.put(
                     ScoredTransaction(
                         id=req.transaction_id,
