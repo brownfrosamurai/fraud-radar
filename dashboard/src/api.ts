@@ -31,11 +31,13 @@ export async function fetchRecent(limit = 50): Promise<ScoredTransaction[]> {
 
 export async function fetchExplanation(
   id: string,
-): Promise<FeatureContribution[]> {
+): Promise<{ status: number; items: FeatureContribution[] }> {
   const res = await fetch(`/api/transactions/${id}/explanation`);
-  if (!res.ok) throw new Error("explain failed");
-  const body = await res.json();
-  return body.explanation;
+  if (res.status === 200) {
+    const body = await res.json();
+    return { status: 200, items: body.explanation };
+  }
+  return { status: res.status, items: [] };
 }
 
 export async function triggerBurst(): Promise<{ status: number; body: BurstResponse }> {
