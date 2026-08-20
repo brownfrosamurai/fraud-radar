@@ -39,3 +39,12 @@ def test_readme_has_future_work() -> None:
 
 def test_readme_embeds_demo_gif() -> None:
     assert "assets/demo.gif" in README
+
+
+def test_demo_gif_exists_and_is_bounded() -> None:
+    path = ROOT / "assets/demo.gif"
+    assert path.is_file()
+    data = path.read_bytes()
+    assert data[:4] == b"GIF8"
+    size = path.stat().st_size
+    assert 10_000 < size <= 8_000_000
