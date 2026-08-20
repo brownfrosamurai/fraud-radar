@@ -1,0 +1,24 @@
+[project]
+name = "fraud-radar-api"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = [
+  "fastapi==0.115.6",
+  "pydantic==2.10.4",
+  "uvicorn[standard]==0.34.0",
+  "httpx==0.28.1",
+]
+
+[project.optional-dependencies]
+dev = ["pytest==8.3.4"]
+
+[build-system]
+requires = ["setuptools>=75"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["api*"]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["api/tests"]
