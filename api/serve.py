@@ -57,6 +57,10 @@ class BundleScorer:
     def __init__(self, bundle: ModelBundle) -> None:
         self._bundle = bundle
 
+    @property
+    def bundle(self) -> ModelBundle:
+        return self._bundle
+
     def score(self, transaction: ScoreRequest, model: str = "isolation_forest") -> float:
         return score_with_bundle(self._bundle, transaction, model=model)
 
