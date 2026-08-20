@@ -1,7 +1,7 @@
 from datetime import datetime
 from uuid import UUID
 
-from sqlalchemy import JSON, DateTime, Float, Numeric, String, create_engine
+from sqlalchemy import JSON, DateTime, Float, Integer, Numeric, String, create_engine, text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
@@ -24,6 +24,7 @@ class ScoredTransactionRow(Base):
         JSON().with_variant(JSONB(), "postgresql"), nullable=False
     )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    scoring_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
 
 def create_engine_from_url(url: str) -> Engine:
@@ -32,3 +33,25 @@ def create_engine_from_url(url: str) -> Engine:
 
 def create_tables(engine: Engine) -> None:
     Base.metadata.create_all(engine)
+
+
+def ensure_scoring_ms_column(engine: Engine) -> None:
+    statements = (
+        "ALTER TABLE scored_transactions ADD COLUMN IF NOT EXISTS scoring_ms INTEGER",
+        "ALTER TABLE scored_transactions ADD COLUMN scoring_ms INTEGER",
+    )
+    for index, statement in enumerate(statements):
+        try:
+            with engine.begin() as conn:
+                conn.execute(text(statement))
+            return
+        except Exception as exc:
+            message = str(exc).lower()
+            duplicate = "duplicate column" in message or "already exists" in message
+            syntax = "syntax" in message
+            if duplicate or (syntax and index == 0):
+                if duplicate:
+                    return
+                continue
+            raise
+

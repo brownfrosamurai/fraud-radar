@@ -1,6 +1,7 @@
 from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
+import pytest
 from sqlalchemy import create_engine
 
 from api.db import create_tables
@@ -90,3 +91,64 @@ def test_postgres_store_get_missing_is_none() -> None:
     create_tables(engine)
     store = PostgresStore(engine)
     assert store.get(_row().id) is None
+
+
+from api.store import stats_from_rows
+
+
+def test_stats_counts_and_throughput_window() -> None:
+    store = InMemoryStore()
+    now = datetime(2026, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
+    old = _row().model_copy(update={"created_at": now - timedelta(seconds=6), "decision": "ALLOW"})
+    fresh_allow = _row().model_copy(update={"created_at": now - timedelta(seconds=1), "decision": "ALLOW"})
+    flagged = _row().model_copy(
+        update={"created_at": now - timedelta(seconds=1), "decision": "BLOCK", "model_score": 0.95}
+    )
+    store.put_many([old, fresh_allow, flagged])
+    snap = store.stats(now=now)
+    assert snap.processed == 3
+    assert snap.flagged == 1
+    assert snap.throughput_tx_per_s == pytest.approx(2 / 5)
+
+
+def test_stats_latency_last_200_skips_nulls() -> None:
+    store = InMemoryStore()
+    now = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    store.put(_row().model_copy(update={"scoring_ms": None}))
+    store.put(_row().model_copy(update={"scoring_ms": 10}))
+    store.put(_row().model_copy(update={"scoring_ms": 30}))
+    snap = store.stats(now=now)
+    assert snap.latency_p50_ms == 20
+    assert snap.latency_p95_ms is not None
+
+
+def test_list_alerts_excludes_allow_and_paginates() -> None:
+    store = InMemoryStore()
+    allow = _row().model_copy(update={"decision": "ALLOW"})
+    review = _row().model_copy(update={"decision": "REVIEW", "amount": 10.0, "model_score": 0.5})
+    block = _row().model_copy(update={"decision": "BLOCK", "amount": 90.0, "model_score": 0.95})
+    store.put_many([allow, review, block])
+    page = store.list_alerts(filter="all", sort="amount", dir="desc", offset=0, limit=1)
+    assert page.total == 2
+    assert page.limit == 1
+    assert page.items[0].id == block.id
+    page2 = store.list_alerts(filter="all", sort="amount", dir="desc", offset=1, limit=1)
+    assert page2.items[0].id == review.id
+
+
+def test_list_alerts_filter_review_only() -> None:
+    store = InMemoryStore()
+    store.put_many([
+        _row().model_copy(update={"decision": "REVIEW"}),
+        _row().model_copy(update={"decision": "BLOCK"}),
+    ])
+    page = store.list_alerts(filter="review", sort="created_at", dir="desc", offset=0, limit=10)
+    assert page.total == 1
+    assert page.items[0].decision == "REVIEW"
+
+
+def test_scoring_ms_excluded_from_json() -> None:
+    row = _row().model_copy(update={"scoring_ms": 42})
+    dumped = row.model_dump(mode="json")
+    assert "scoring_ms" not in dumped
+    assert row.scoring_ms == 42

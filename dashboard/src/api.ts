@@ -45,3 +45,43 @@ export async function triggerBurst(): Promise<{ status: number; body: BurstRespo
   const body = (await res.json()) as BurstResponse;
   return { status: res.status, body };
 }
+
+export type Stats = {
+  processed: number;
+  throughput_tx_per_s: number;
+  latency_p50_ms: number | null;
+  latency_p95_ms: number | null;
+  flagged: number;
+};
+
+export async function fetchStats(): Promise<{ status: number; body: Stats | null }> {
+  const res = await fetch("/api/stats");
+  if (res.status !== 200) return { status: res.status, body: null };
+  return { status: 200, body: (await res.json()) as Stats };
+}
+
+export type AlertsPage = {
+  items: ScoredTransaction[];
+  total: number;
+  offset: number;
+  limit: number;
+};
+
+export async function fetchAlerts(params: {
+  filter: "all" | "review" | "block";
+  sort: "created_at" | "amount" | "model_score" | "decision";
+  dir: "asc" | "desc";
+  offset: number;
+  limit: number;
+}): Promise<{ status: number; body: AlertsPage | null }> {
+  const query = new URLSearchParams({
+    filter: params.filter,
+    sort: params.sort,
+    dir: params.dir,
+    offset: String(params.offset),
+    limit: String(params.limit),
+  });
+  const res = await fetch(`/api/alerts?${query.toString()}`);
+  if (res.status !== 200) return { status: res.status, body: null };
+  return { status: 200, body: (await res.json()) as AlertsPage };
+}

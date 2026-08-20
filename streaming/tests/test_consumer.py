@@ -56,6 +56,8 @@ def test_score_request_uses_isolation_forest_and_decide() -> None:
     assert row.model_name == "isolation_forest"
     assert row.decision == "BLOCK"
     assert row.model_score == 0.93
+    assert row.scoring_ms is not None
+    assert row.scoring_ms >= 0
 
 
 def test_run_consumer_skips_malformed_scores_and_flushes_exhausted_source() -> None:
@@ -101,13 +103,15 @@ def test_http_notifier_sends_secret_and_checks_response(
     monkeypatch.setattr(httpx, "post", fake_post)
     caplog.set_level(logging.ERROR)
 
-    HttpNotifier(
-        "http://api/internal/scored", secret="test-secret"
-    ).notify([score_request(_req(), ConstScorer(0.12), datetime.now(timezone.utc))])
+    row = score_request(_req(), ConstScorer(0.12), datetime.now(timezone.utc))
+    HttpNotifier("http://api/internal/scored", secret="test-secret").notify([row])
 
     assert called["headers"] == {"X-Internal-Secret": "test-secret"}
     assert called["checked"] is True
     assert "commit notify failed" in caplog.text
+    payload = called["json"][0]
+    assert payload["scoring_ms"] == row.scoring_ms
+    assert row.scoring_ms is not None
 
 
 def test_batch_flushes_at_10_rows() -> None:

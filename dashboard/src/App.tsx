@@ -1,5 +1,5 @@
-import { ScoreCard } from "./ScoreCard";
+import { Workspace } from "./Workspace";
 
 export default function App() {
-  return <ScoreCard />;
+  return <Workspace />;
 }
