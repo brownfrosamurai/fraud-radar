@@ -33,11 +33,13 @@ services:
     build:
       context: .
       dockerfile: api/Dockerfile
+    restart: unless-stopped
     ports:
       - "8000:8000"
     environment:
       DATABASE_URL: postgresql+psycopg://fraud:fraud@postgres:5432/fraud_radar
       PRODUCER_URL: http://producer:8001
+      INTERNAL_API_SECRET: fraud-radar-streaming
     depends_on:
       postgres:
         condition: service_healthy
@@ -48,6 +50,7 @@ services:
     build:
       context: .
       dockerfile: api/Dockerfile
+    restart: unless-stopped
     command: ["uvicorn", "streaming.producer:create_app", "--factory", "--host", "0.0.0.0", "--port", "8001"]
     environment:
       KAFKA_BOOTSTRAP: redpanda:9092
@@ -62,6 +65,7 @@ services:
     build:
       context: .
       dockerfile: api/Dockerfile
+    restart: unless-stopped
     command: ["python", "-m", "streaming.consumer"]
     environment:
       KAFKA_BOOTSTRAP: redpanda:9092
@@ -69,6 +73,7 @@ services:
       KAFKA_GROUP: fraud-radar-scorer
       DATABASE_URL: postgresql+psycopg://fraud:fraud@postgres:5432/fraud_radar
       NOTIFY_URL: http://api:8000/internal/scored
+      INTERNAL_API_SECRET: fraud-radar-streaming
     depends_on:
       redpanda:
         condition: service_healthy

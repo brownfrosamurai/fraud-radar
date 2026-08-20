@@ -2,11 +2,13 @@ import logging
 from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
+import httpx
+
 from api.schemas import Features, ScoreRequest, ScoredTransaction
 from api.serve import ConstScorer
 from api.store import InMemoryStore
-from streaming.consumer import parse_message, score_request
 from streaming.batch import BatchWriter
+from streaming.consumer import HttpNotifier, parse_message, run_consumer, score_request
 
 
 def _req() -> ScoreRequest:
@@ -54,6 +56,58 @@ def test_score_request_uses_isolation_forest_and_decide() -> None:
     assert row.model_name == "isolation_forest"
     assert row.decision == "BLOCK"
     assert row.model_score == 0.93
+
+
+def test_run_consumer_skips_malformed_scores_and_flushes_exhausted_source() -> None:
+    store = InMemoryStore()
+    notifier = RecordingNotifier()
+    req = _req()
+
+    run_consumer(
+        bootstrap="unused:9092",
+        store=store,
+        scorer=ConstScorer(0.12),
+        notify=notifier,
+        messages=[b"not-json", req.model_dump_json().encode()],
+    )
+
+    stored = store.get(req.transaction_id)
+    assert stored is not None
+    assert stored.model_score == 0.12
+    assert stored.model_name == "isolation_forest"
+    assert len(notifier.batches) == 1
+    assert [row.id for row in notifier.batches[0]] == [req.transaction_id]
+
+
+def test_http_notifier_sends_secret_and_checks_response(
+    monkeypatch, caplog
+) -> None:
+    called: dict[str, object] = {}
+
+    class ErrorResponse:
+        def raise_for_status(self) -> None:
+            called["checked"] = True
+            raise httpx.HTTPStatusError(
+                "server error",
+                request=httpx.Request("POST", "http://api/internal/scored"),
+                response=httpx.Response(500),
+            )
+
+    def fake_post(url: str, **kwargs: object) -> ErrorResponse:
+        called["url"] = url
+        called.update(kwargs)
+        return ErrorResponse()
+
+    monkeypatch.setattr(httpx, "post", fake_post)
+    caplog.set_level(logging.ERROR)
+
+    HttpNotifier(
+        "http://api/internal/scored", secret="test-secret"
+    ).notify([score_request(_req(), ConstScorer(0.12), datetime.now(timezone.utc))])
+
+    assert called["headers"] == {"X-Internal-Secret": "test-secret"}
+    assert called["checked"] is True
+    assert "commit notify failed" in caplog.text
 
 
 def test_batch_flushes_at_10_rows() -> None:

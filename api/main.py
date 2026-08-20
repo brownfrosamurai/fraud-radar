@@ -5,7 +5,7 @@ from contextlib import suppress
 from datetime import datetime, timezone
 from uuid import UUID
 
-from fastapi import FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, Header, HTTPException, Query, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse
 
 from api.burst import (
@@ -40,6 +40,7 @@ def create_app(
         PostgresStore(create_engine_from_url(url)) if url else InMemoryStore()
     )
     app.state.hub = hub or StreamHub()
+    app.state.internal_secret = os.environ.get("INTERNAL_API_SECRET")
     app.state.producer = producer or HttpProducerClient(
         os.environ.get("PRODUCER_URL", "http://producer:8001")
     )
@@ -96,7 +97,15 @@ def create_app(
             )
 
     @app.post("/internal/scored")
-    def post_internal_scored(rows: list[ScoredTransaction]) -> dict:
+    def post_internal_scored(
+        rows: list[ScoredTransaction],
+        x_internal_secret: str | None = Header(default=None),
+    ) -> dict:
+        if (
+            app.state.internal_secret
+            and x_internal_secret != app.state.internal_secret
+        ):
+            raise HTTPException(status_code=401, detail="invalid internal secret")
         app.state.store.put_many(rows)
         for row in rows:
             app.state.hub.broadcast(row)

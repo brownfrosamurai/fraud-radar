@@ -47,6 +47,35 @@ def test_internal_scored_persists_and_broadcasts() -> None:
     assert store.get(UUID(payload["id"])) is not None
 
 
+def test_internal_scored_requires_configured_secret(monkeypatch) -> None:
+    monkeypatch.setenv("INTERNAL_API_SECRET", "test-secret")
+    store = InMemoryStore()
+    app = create_app(
+        store=store,
+        scorer=ConstScorer(0.12),
+        producer=FakeProducer(),
+    )
+    payload = _scored()
+    client = TestClient(app)
+
+    assert client.post("/internal/scored", json=[payload]).status_code == 401
+    assert (
+        client.post(
+            "/internal/scored",
+            json=[payload],
+            headers={"X-Internal-Secret": "wrong-secret"},
+        ).status_code
+        == 401
+    )
+    accepted = client.post(
+        "/internal/scored",
+        json=[payload],
+        headers={"X-Internal-Secret": "test-secret"},
+    )
+    assert accepted.status_code == 200
+    assert store.get(UUID(payload["id"])) is not None
+
+
 def test_explanation_readable_after_internal_scored() -> None:
     store = InMemoryStore()
     app = create_app(store=store, scorer=ConstScorer(0.12), producer=FakeProducer())

@@ -36,6 +36,10 @@ class BatchWriter:
         if len(self._buf) >= self._max_rows or elapsed_ms >= self._max_wait_ms:
             self._flush()
 
+    def flush_pending(self) -> None:
+        if self._buf:
+            self._flush()
+
     def _flush(self) -> None:
         batch = self._buf
         self._buf = []

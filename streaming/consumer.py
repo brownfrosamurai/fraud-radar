@@ -1,5 +1,6 @@
 import logging
-from datetime import datetime
+from collections.abc import Iterable
+from datetime import datetime, timezone
 from typing import Protocol
 
 from api.schemas import ScoreRequest, ScoredTransaction
@@ -37,18 +38,21 @@ class Notifier(Protocol):
 
 
 class HttpNotifier:
-    def __init__(self, url: str) -> None:
+    def __init__(self, url: str, secret: str | None = None) -> None:
         self._url = url
+        self._secret = secret
 
     def notify(self, rows: list[ScoredTransaction]) -> None:
         import httpx
 
         try:
-            httpx.post(
+            response = httpx.post(
                 self._url,
                 json=[row.model_dump(mode="json") for row in rows],
+                headers={"X-Internal-Secret": self._secret} if self._secret else None,
                 timeout=2.0,
             )
+            response.raise_for_status()
         except Exception:
             logger.exception("commit notify failed")
 
@@ -60,12 +64,29 @@ def run_consumer(
     notify: Notifier,
     topic: str = "transactions",
     group_id: str = "fraud-radar-scorer",
+    messages: Iterable[bytes] | None = None,
 ) -> None:
-    from datetime import timezone
+    from streaming.batch import BatchWriter
+
+    writer = BatchWriter(
+        store=store,
+        notify=notify.notify,
+        clock=lambda: datetime.now(timezone.utc),
+    )
+
+    def process(raw: bytes) -> None:
+        req = parse_message(raw)
+        if req is None:
+            return
+        writer.add(score_request(req, scorer, datetime.now(timezone.utc)))
+
+    if messages is not None:
+        for raw in messages:
+            process(raw)
+        writer.flush_pending()
+        return
 
     from kafka import KafkaConsumer
-
-    from streaming.batch import BatchWriter
 
     consumer = KafkaConsumer(
         topic,
@@ -74,17 +95,14 @@ def run_consumer(
         auto_offset_reset="latest",
         value_deserializer=lambda v: v,
     )
-    writer = BatchWriter(
-        store=store,
-        notify=notify.notify,
-        clock=lambda: datetime.now(timezone.utc),
-    )
-    for msg in consumer:
-        req = parse_message(msg.value)
-        if req is None:
+    while True:
+        records = consumer.poll(timeout_ms=100)
+        if not records:
+            writer.flush_if_needed()
             continue
-        writer.add(score_request(req, scorer, datetime.now(timezone.utc)))
-        writer.flush_if_needed()
+        for batch in records.values():
+            for msg in batch:
+                process(msg.value)
 
 
 def main() -> None:
@@ -97,7 +115,8 @@ def main() -> None:
     store = PostgresStore(create_engine_from_url(os.environ["DATABASE_URL"]))
     scorer = BundleScorer(load_bundle())
     notifier = HttpNotifier(
-        os.environ.get("NOTIFY_URL", "http://api:8000/internal/scored")
+        os.environ.get("NOTIFY_URL", "http://api:8000/internal/scored"),
+        secret=os.environ.get("INTERNAL_API_SECRET"),
     )
     run_consumer(
         bootstrap=os.environ.get("KAFKA_BOOTSTRAP", "redpanda:9092"),

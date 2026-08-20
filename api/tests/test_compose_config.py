@@ -8,6 +8,8 @@ def test_compose_six_services_and_internal_producer() -> None:
     assert "8000:8000" in text
     assert "3000:80" in text
     assert "8001:8001" not in text
+    assert text.count("restart: unless-stopped") == 3
+    assert text.count("INTERNAL_API_SECRET: fraud-radar-streaming") == 2
 
 
 def test_nginx_blocks_internal_and_upgrades_websocket() -> None:
