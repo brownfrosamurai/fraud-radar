@@ -74,9 +74,30 @@ class ConstScorer:
         return self._value
 
 
+def _load_autoencoder(dest_dir: Path) -> tuple[Any | None, QuantileTransformer | None]:
+    ae_path = dest_dir / "autoencoder.pt"
+    cdf_path = dest_dir / "ae_cdf.joblib"
+    if not ae_path.is_file() or not cdf_path.is_file():
+        return None, None
+    try:
+        import torch
+
+        from ml.autoencoder import Autoencoder
+    except ImportError:
+        return None, None
+    model = Autoencoder()
+    state = torch.load(ae_path, map_location="cpu", weights_only=True)
+    model.load_state_dict(state)
+    model.eval()
+    return model, joblib.load(cdf_path)
+
+
 def load_bundle(dest_dir: Path = ARTIFACTS_DIR) -> ModelBundle:
+    autoencoder, ae_cdf = _load_autoencoder(dest_dir)
     return ModelBundle(
         scaler=joblib.load(dest_dir / "scaler.joblib"),
         isolation_forest=joblib.load(dest_dir / "isolation_forest.joblib"),
         if_cdf=joblib.load(dest_dir / "if_cdf.joblib"),
+        autoencoder=autoencoder,
+        ae_cdf=ae_cdf,
     )
