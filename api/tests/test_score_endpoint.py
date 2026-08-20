@@ -1,42 +1,26 @@
-from api.scoring import score
 from api.tests.conftest import sample_request
 
 
-def test_score_canned_percentiles() -> None:
-    from api.schemas import ScoreRequest
-
-    low = ScoreRequest.model_validate(sample_request(amount=20.0))
-    mid = ScoreRequest.model_validate(sample_request(amount=150.0))
-    high = ScoreRequest.model_validate(sample_request(amount=600.0))
-    assert score(low) == 0.12
-    assert score(mid) == 0.55
-    assert score(high) == 0.93
-
-
-def test_post_score_low_amount_allows(client) -> None:
+def test_post_score_default_model_is_isolation_forest(client) -> None:
     payload = sample_request(amount=20.0)
     res = client.post("/score", json=payload)
     assert res.status_code == 200
     body = res.json()
     assert body["id"] == payload["transaction_id"]
-    assert body["model_score"] == 0.12
-    assert body["decision"] == "ALLOW"
     assert body["model_name"] == "isolation_forest"
+    assert 0.0 <= body["model_score"] <= 1.0
+    assert body["decision"] in {"ALLOW", "REVIEW", "BLOCK"}
     assert "explanation" not in body
 
 
-def test_post_score_mid_amount_reviews(client) -> None:
-    res = client.post("/score", json=sample_request(amount=150.0))
-    assert res.status_code == 200
-    assert res.json()["decision"] == "REVIEW"
-    assert res.json()["model_score"] == 0.55
+def test_post_score_invalid_model_is_422(client) -> None:
+    res = client.post("/score", params={"model": "nope"}, json=sample_request())
+    assert res.status_code == 422
 
 
-def test_post_score_high_amount_blocks(client) -> None:
-    res = client.post("/score", json=sample_request(amount=600.0))
-    assert res.status_code == 200
-    assert res.json()["decision"] == "BLOCK"
-    assert res.json()["model_score"] == 0.93
+def test_post_score_autoencoder_without_weights_is_501(client) -> None:
+    res = client.post("/score", params={"model": "autoencoder"}, json=sample_request())
+    assert res.status_code == 501
 
 
 def test_post_score_rejects_malformed(client) -> None:
