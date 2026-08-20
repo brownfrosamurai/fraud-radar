@@ -23,6 +23,9 @@ class CooldownActive(Exception):
 
 def load_burst_rows(path: Path) -> list[ScoreRequest]:
     raw = json.loads(path.read_text())
+    if not isinstance(raw, list) or len(raw) != BURST_SIZE:
+        n = len(raw) if isinstance(raw, list) else type(raw).__name__
+        raise ValueError(f"burst payload must contain exactly {BURST_SIZE} rows, got {n}")
     now = datetime.now(timezone.utc)
     return [
         ScoreRequest(
@@ -70,6 +73,11 @@ class BurstController:
             if rows is None:
                 rows = load_burst_rows(BURST_PAYLOAD_PATH)
                 self._burst_rows = rows
+            rows = rows[:BURST_SIZE]
+            if len(rows) != BURST_SIZE:
+                raise ValueError(
+                    f"burst requires exactly {BURST_SIZE} rows, got {len(rows)}"
+                )
             for src in rows:
                 req = ScoreRequest(
                     transaction_id=uuid4(),

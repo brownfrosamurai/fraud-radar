@@ -1,9 +1,17 @@
 from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
+import pytest
 from fastapi.testclient import TestClient
 
-from api.burst import BURST_SIZE, BURST_WINDOW_MS, COOLDOWN_SECONDS
+from api.burst import (
+    BURST_PAYLOAD_PATH,
+    BURST_SIZE,
+    BURST_WINDOW_MS,
+    COOLDOWN_SECONDS,
+    BurstController,
+    load_burst_rows,
+)
 from api.main import create_app
 from api.schemas import Features, ScoreRequest
 from api.serve import ConstScorer
@@ -69,7 +77,47 @@ def _schema_ref(response: dict) -> str:
     return schema.get("$ref", schema.get("anyOf", [{}])[0].get("$ref", ""))
 
 
-def test_score_then_burst_share_lazy_loaded_scorer(store, clock, burst_rows, monkeypatch) -> None:
+def test_load_burst_rows_rejects_wrong_length(tmp_path) -> None:
+    path = tmp_path / "burst.json"
+    path.write_text("[]")
+    with pytest.raises(ValueError, match="exactly 50"):
+        load_burst_rows(path)
+
+
+def test_load_burst_rows_committed_payload_is_burst_size() -> None:
+    rows = load_burst_rows(BURST_PAYLOAD_PATH)
+    assert len(rows) == BURST_SIZE
+
+
+def test_trigger_caps_oversize_payload_at_burst_size(store, clock) -> None:
+    rows = [_payload_row(v14=-3.0) for _ in range(60)]
+    controller = BurstController(
+        store=store, clock=clock, scorer=ConstScorer(0.93), burst_rows=rows
+    )
+    res = controller.trigger()
+    assert res.size == BURST_SIZE
+    assert len(store.list_recent(limit=60)) == BURST_SIZE
+
+
+def test_trigger_rejects_undersize_payload(store, clock) -> None:
+    rows = [_payload_row(v14=-3.0) for _ in range(40)]
+    controller = BurstController(
+        store=store, clock=clock, scorer=ConstScorer(0.93), burst_rows=rows
+    )
+    with pytest.raises(ValueError, match="exactly 50"):
+        controller.trigger()
+
+
+def test_create_app_fails_when_artifacts_missing(store, clock, burst_rows, monkeypatch) -> None:
+    def boom() -> None:
+        raise FileNotFoundError("artifacts missing")
+
+    monkeypatch.setattr("api.main.load_bundle", boom)
+    with pytest.raises(FileNotFoundError, match="artifacts missing"):
+        create_app(store=store, clock=clock, burst_rows=burst_rows)
+
+
+def test_score_then_burst_share_eager_loaded_scorer(store, clock, burst_rows, monkeypatch) -> None:
     calls = {"n": 0}
 
     def fake_load_bundle():
@@ -78,9 +126,10 @@ def test_score_then_burst_share_lazy_loaded_scorer(store, clock, burst_rows, mon
 
     monkeypatch.setattr("api.main.load_bundle", fake_load_bundle)
     app = create_app(store=store, clock=clock, burst_rows=burst_rows)
+    assert calls["n"] == 1
+    assert app.state.scorer is not None
+    assert app.state.burst._scorer is app.state.scorer
     client = TestClient(app)
-    assert app.state.scorer is None
-    assert app.state.burst._scorer is None
 
     score_res = client.post("/score", json=sample_request())
     assert score_res.status_code == 200
@@ -93,7 +142,7 @@ def test_score_then_burst_share_lazy_loaded_scorer(store, clock, burst_rows, mon
     assert app.state.burst._scorer is app.state.scorer
 
 
-def test_burst_then_score_share_lazy_loaded_scorer(store, clock, burst_rows, monkeypatch) -> None:
+def test_burst_then_score_share_eager_loaded_scorer(store, clock, burst_rows, monkeypatch) -> None:
     calls = {"n": 0}
 
     def fake_load_bundle():
@@ -102,6 +151,7 @@ def test_burst_then_score_share_lazy_loaded_scorer(store, clock, burst_rows, mon
 
     monkeypatch.setattr("api.main.load_bundle", fake_load_bundle)
     app = create_app(store=store, clock=clock, burst_rows=burst_rows)
+    assert calls["n"] == 1
     client = TestClient(app)
 
     burst_res = client.post("/demo/burst")

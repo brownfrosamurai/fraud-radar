@@ -1,3 +1,5 @@
+import inspect
+
 import numpy as np
 import pandas as pd
 
@@ -26,3 +28,12 @@ def test_dataframe_to_array_uses_column_order_not_df_order() -> None:
     assert arr.shape == (1, 30)
     np.testing.assert_allclose(arr[0, 0], 1.0)
     np.testing.assert_allclose(arr[0, -1], 3.0)
+
+
+def test_dataframe_to_array_does_not_import_pandas_at_runtime() -> None:
+    import ml.features as features
+
+    source = inspect.getsource(features.dataframe_to_array)
+    assert "import pandas" not in source
+    assert "TYPE_CHECKING" in inspect.getsource(features)
+

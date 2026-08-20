@@ -21,7 +21,8 @@ def create_app(
     app = FastAPI(title="Fraud Radar")
     app.state.store = store or InMemoryStore()
     time_fn = clock or (lambda: datetime.now(timezone.utc))
-    # Defer load_bundle until first score/burst: artifacts are not in-tree until a later task.
+    if scorer is None:
+        scorer = BundleScorer(load_bundle())
     app.state.scorer = scorer
 
     def resolve_scorer() -> Scorer:

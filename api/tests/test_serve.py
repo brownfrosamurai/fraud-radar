@@ -1,12 +1,10 @@
 import numpy as np
-import pandas as pd
 import pytest
 from sklearn.preprocessing import QuantileTransformer
 
 from api.schemas import ScoreRequest
 from api.serve import BundleScorer, score_with_bundle
 from api.tests.conftest import sample_request, tiny_if_bundle
-from ml.features import FEATURE_COLUMNS, dataframe_to_array
 
 
 def test_score_with_bundle_is_unit_interval() -> None:
@@ -42,10 +40,7 @@ def test_bundle_scorer_autoencoder_unit_interval() -> None:
 
     bundle = tiny_if_bundle()
     rng = np.random.default_rng(0)
-    legit = pd.DataFrame(
-        [{name: float(rng.normal()) for name in FEATURE_COLUMNS} for _ in range(60)]
-    )
-    Xs = bundle.scaler.transform(dataframe_to_array(legit))
+    Xs = bundle.scaler.transform(rng.normal(size=(60, 30)))
     ae = fit_autoencoder(Xs, epochs=1, batch_size=16, seed=42)
     raw = raw_ae_score(ae, Xs)
     bundle.autoencoder = ae
@@ -67,10 +62,7 @@ def test_load_bundle_autoencoder_state_dict_round_trip(tmp_path) -> None:
 
     src = tiny_if_bundle()
     rng = np.random.default_rng(0)
-    legit = pd.DataFrame(
-        [{name: float(rng.normal()) for name in FEATURE_COLUMNS} for _ in range(60)]
-    )
-    Xs = src.scaler.transform(dataframe_to_array(legit))
+    Xs = src.scaler.transform(rng.normal(size=(60, 30)))
     ae = fit_autoencoder(Xs, epochs=1, batch_size=16, seed=42)
     raw = raw_ae_score(ae, Xs)
     ae_cdf = QuantileTransformer(

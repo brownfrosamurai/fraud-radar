@@ -2,9 +2,11 @@ from api.tests.conftest import sample_request
 
 
 def test_post_score_default_model_is_isolation_forest(client) -> None:
-    res = client.post("/score", json=sample_request(amount=20.0))
+    payload = sample_request(amount=20.0)
+    res = client.post("/score", json=payload)
     assert res.status_code == 200
     body = res.json()
+    assert body["id"] == payload["transaction_id"]
     assert body["model_name"] == "isolation_forest"
     assert 0.0 <= body["model_score"] <= 1.0
     assert body["decision"] in {"ALLOW", "REVIEW", "BLOCK"}

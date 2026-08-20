@@ -2,8 +2,15 @@ import numpy as np
 import torch
 
 from ml.autoencoder import Autoencoder
+from ml import evaluate
 from ml.evaluate import binary_at_threshold, evaluate_model
 from ml.train_autoencoder import fit_autoencoder, raw_ae_score
+
+
+def test_evaluate_does_not_retrain_or_overwrite_metrics() -> None:
+    assert not hasattr(evaluate, "compare_models")
+    assert not hasattr(evaluate, "main")
+
 
 
 def test_evaluate_model_keys_exclude_accuracy() -> None:

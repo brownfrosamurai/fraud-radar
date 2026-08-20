@@ -2,7 +2,6 @@ from datetime import datetime, timezone
 from uuid import uuid4
 
 import numpy as np
-import pandas as pd
 import pytest
 from fastapi.testclient import TestClient
 from sklearn.ensemble import IsolationForest
@@ -12,7 +11,6 @@ from api.main import create_app
 from api.schemas import Features, ScoreRequest
 from api.serve import BundleScorer, ConstScorer, ModelBundle
 from api.store import InMemoryStore
-from ml.features import FEATURE_COLUMNS, dataframe_to_array
 
 
 class FrozenClock:
@@ -42,10 +40,7 @@ def sample_request(amount: float = 20.0) -> dict:
 
 def tiny_if_bundle() -> ModelBundle:
     rng = np.random.default_rng(0)
-    legit = pd.DataFrame(
-        [{name: float(rng.normal()) for name in FEATURE_COLUMNS} for _ in range(60)]
-    )
-    X = dataframe_to_array(legit)
+    X = rng.normal(size=(60, 30))
     scaler = StandardScaler().fit(X)
     Xs = scaler.transform(X)
     model = IsolationForest(n_estimators=20, random_state=42).fit(Xs)
