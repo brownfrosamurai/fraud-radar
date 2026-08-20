@@ -16,6 +16,23 @@ const BADGE: Record<Decision, string> = {
   BLOCK: "var(--block)",
 };
 
+function mergeNewest(
+  current: ScoredTransaction[],
+  incoming: ScoredTransaction[],
+): ScoredTransaction[] {
+  const byId = new Map<string, ScoredTransaction>();
+  for (const row of incoming) byId.set(row.id, row);
+  for (const row of current) {
+    const other = byId.get(row.id);
+    if (!other || Date.parse(row.occurred_at) >= Date.parse(other.occurred_at)) {
+      byId.set(row.id, row);
+    }
+  }
+  return [...byId.values()]
+    .sort((left, right) => Date.parse(right.occurred_at) - Date.parse(left.occurred_at))
+    .slice(0, 50);
+}
+
 export function ScoreCard() {
   const [rows, setRows] = useState<ScoredTransaction[]>([]);
   const [selected, setSelected] = useState<ScoredTransaction | null>(null);
@@ -31,6 +48,7 @@ export function ScoreCard() {
     let socket: WebSocket | null = null;
     let reconnectTimer: number | null = null;
     let attempt = 0;
+    let generation = 0;
 
     async function selectTransaction(row: ScoredTransaction) {
       selectedId.current = row.id;
@@ -46,45 +64,75 @@ export function ScoreCard() {
       }
     }
 
-    function scheduleReconnect() {
-      if (cancelled || reconnectTimer !== null) return;
+    function scheduleReconnect(
+      failedSocket: WebSocket,
+      failedGeneration: number,
+      shouldClose: boolean,
+    ) {
+      if (
+        cancelled ||
+        reconnectTimer !== null ||
+        socket !== failedSocket ||
+        generation !== failedGeneration
+      ) {
+        return;
+      }
+      failedSocket.onopen = null;
+      failedSocket.onmessage = null;
+      failedSocket.onclose = null;
+      failedSocket.onerror = null;
+      socket = null;
+      if (shouldClose) failedSocket.close();
       setReconnecting(true);
       const delay = nextReconnectDelay(attempt);
       attempt += 1;
       reconnectTimer = window.setTimeout(() => {
         reconnectTimer = null;
-        connect();
+        if (!cancelled && generation === failedGeneration && socket === null) connect();
       }, delay);
     }
 
     function connect() {
       if (cancelled) return;
-      socket = new WebSocket(streamUrl());
-      socket.onopen = () => {
-        if (cancelled) return;
+      const currentGeneration = ++generation;
+      const currentSocket = new WebSocket(streamUrl());
+      socket = currentSocket;
+      currentSocket.onopen = () => {
+        if (cancelled || socket !== currentSocket || generation !== currentGeneration) return;
         setReconnecting(false);
         attempt = 0;
         void fetchRecent()
           .then((recent) => {
-            if (cancelled) return;
-            setRows((current) => [
-              ...current,
-              ...recent.filter((row) => !current.some((item) => item.id === row.id)),
-            ].slice(0, 50));
+            if (
+              cancelled ||
+              socket !== currentSocket ||
+              generation !== currentGeneration
+            ) {
+              return;
+            }
+            setRows((current) => mergeNewest(current, recent));
             if (!selectedId.current && recent[0]) void selectTransaction(recent[0]);
           })
           .catch(() => {
-            if (!cancelled) setError("API unavailable");
+            if (
+              !cancelled &&
+              socket === currentSocket &&
+              generation === currentGeneration
+            ) {
+              setError("API unavailable");
+            }
           });
       };
-      socket.onmessage = (event) => {
-        if (cancelled) return;
+      currentSocket.onmessage = (event) => {
+        if (cancelled || socket !== currentSocket || generation !== currentGeneration) return;
         const row = JSON.parse(event.data) as ScoredTransaction;
-        setRows((current) => [row, ...current.filter((item) => item.id !== row.id)].slice(0, 50));
+        setRows((current) => mergeNewest(current, [row]));
         if (!selectedId.current) void selectTransaction(row);
       };
-      socket.onclose = scheduleReconnect;
-      socket.onerror = scheduleReconnect;
+      currentSocket.onclose = () =>
+        scheduleReconnect(currentSocket, currentGeneration, false);
+      currentSocket.onerror = () =>
+        scheduleReconnect(currentSocket, currentGeneration, true);
     }
 
     connect();
