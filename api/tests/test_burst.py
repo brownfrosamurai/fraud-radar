@@ -7,7 +7,7 @@ from api.burst import BURST_SIZE, BURST_WINDOW_MS, COOLDOWN_SECONDS
 from api.main import create_app
 from api.schemas import Features, ScoreRequest
 from api.serve import ConstScorer
-from api.tests.conftest import sample_features
+from api.tests.conftest import sample_features, sample_request, tiny_if_bundle
 
 
 def _payload_row(v14: float) -> ScoreRequest:
@@ -67,6 +67,68 @@ def test_burst_accepted_after_cooldown(burst_client, clock) -> None:
 def _schema_ref(response: dict) -> str:
     schema = response["content"]["application/json"]["schema"]
     return schema.get("$ref", schema.get("anyOf", [{}])[0].get("$ref", ""))
+
+
+def test_score_then_burst_share_lazy_loaded_scorer(store, clock, burst_rows, monkeypatch) -> None:
+    calls = {"n": 0}
+
+    def fake_load_bundle():
+        calls["n"] += 1
+        return tiny_if_bundle()
+
+    monkeypatch.setattr("api.main.load_bundle", fake_load_bundle)
+    app = create_app(store=store, clock=clock, burst_rows=burst_rows)
+    client = TestClient(app)
+    assert app.state.scorer is None
+    assert app.state.burst._scorer is None
+
+    score_res = client.post("/score", json=sample_request())
+    assert score_res.status_code == 200
+    assert calls["n"] == 1
+    assert app.state.burst._scorer is app.state.scorer
+
+    burst_res = client.post("/demo/burst")
+    assert burst_res.status_code == 200
+    assert calls["n"] == 1
+    assert app.state.burst._scorer is app.state.scorer
+
+
+def test_burst_then_score_share_lazy_loaded_scorer(store, clock, burst_rows, monkeypatch) -> None:
+    calls = {"n": 0}
+
+    def fake_load_bundle():
+        calls["n"] += 1
+        return tiny_if_bundle()
+
+    monkeypatch.setattr("api.main.load_bundle", fake_load_bundle)
+    app = create_app(store=store, clock=clock, burst_rows=burst_rows)
+    client = TestClient(app)
+
+    burst_res = client.post("/demo/burst")
+    assert burst_res.status_code == 200
+    assert calls["n"] == 1
+    assert app.state.burst._scorer is app.state.scorer
+    assert app.state.scorer is not None
+
+    score_res = client.post("/score", json=sample_request())
+    assert score_res.status_code == 200
+    assert calls["n"] == 1
+    assert app.state.burst._scorer is app.state.scorer
+
+
+def test_injected_scorer_is_not_replaced_by_load_bundle(store, clock, burst_rows, monkeypatch) -> None:
+    injected = ConstScorer(0.93)
+
+    def boom() -> None:
+        raise AssertionError("load_bundle must not run when a scorer is injected")
+
+    monkeypatch.setattr("api.main.load_bundle", boom)
+    app = create_app(store=store, clock=clock, scorer=injected, burst_rows=burst_rows)
+    client = TestClient(app)
+    assert client.post("/demo/burst").status_code == 200
+    assert client.post("/score", json=sample_request()).status_code == 200
+    assert app.state.scorer is injected
+    assert app.state.burst._scorer is injected
 
 
 def test_burst_openapi_documents_200_and_429(client) -> None:

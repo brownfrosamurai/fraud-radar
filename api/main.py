@@ -21,10 +21,23 @@ def create_app(
     app = FastAPI(title="Fraud Radar")
     app.state.store = store or InMemoryStore()
     time_fn = clock or (lambda: datetime.now(timezone.utc))
-    # Defer load_bundle until first score: artifacts are not in-tree until a later task.
+    # Defer load_bundle until first score/burst: artifacts are not in-tree until a later task.
     app.state.scorer = scorer
+
+    def resolve_scorer() -> Scorer:
+        if app.state.scorer is None:
+            app.state.scorer = BundleScorer(load_bundle())
+        burst = getattr(app.state, "burst", None)
+        if burst is not None:
+            burst.bind_scorer(app.state.scorer)
+        return app.state.scorer
+
     app.state.burst = BurstController(
-        store=app.state.store, clock=time_fn, scorer=app.state.scorer, burst_rows=burst_rows
+        store=app.state.store,
+        clock=time_fn,
+        scorer=app.state.scorer,
+        burst_rows=burst_rows,
+        resolve_scorer=resolve_scorer,
     )
 
     @app.get("/health")
@@ -60,10 +73,9 @@ def create_app(
     ) -> ScoredTransaction:
         if model not in {"isolation_forest", "autoencoder"}:
             raise HTTPException(status_code=422, detail="unknown model")
-        if app.state.scorer is None:
-            app.state.scorer = BundleScorer(load_bundle())
+        resolved = resolve_scorer()
         try:
-            model_score = app.state.scorer.score(body, model=model)
+            model_score = resolved.score(body, model=model)
         except LookupError as exc:
             raise HTTPException(status_code=501, detail=str(exc)) from exc
         row = ScoredTransaction(

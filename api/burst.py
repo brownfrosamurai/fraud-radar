@@ -42,14 +42,19 @@ class BurstController:
         clock: Callable[[], datetime],
         scorer: Scorer | None,
         burst_rows: list[ScoreRequest] | None = None,
+        resolve_scorer: Callable[[], Scorer] | None = None,
     ) -> None:
         self._store = store
         self._clock = clock
         self._scorer = scorer
         self._burst_rows = burst_rows
+        self._resolve_scorer = resolve_scorer
         self._last_burst_at: datetime | None = None
         # Cooldown check + inserts must be one critical section vs concurrent POSTs.
         self._lock = threading.Lock()
+
+    def bind_scorer(self, scorer: Scorer) -> None:
+        self._scorer = scorer
 
     def trigger(self) -> BurstResponse:
         with self._lock:
@@ -59,6 +64,8 @@ class BurstController:
                 remaining = int(COOLDOWN_SECONDS - elapsed)
                 if remaining > 0:
                     raise CooldownActive(remaining)
+            if self._resolve_scorer is not None:
+                self._scorer = self._resolve_scorer()
             rows = self._burst_rows
             if rows is None:
                 rows = load_burst_rows(BURST_PAYLOAD_PATH)
