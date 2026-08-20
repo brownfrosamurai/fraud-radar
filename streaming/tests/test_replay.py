@@ -1,8 +1,9 @@
 from datetime import datetime, timezone
+from pathlib import Path
 from uuid import uuid4
 
 from api.schemas import Features, ScoreRequest
-from streaming.replay import fresh_request, replay_loop, spread_publish
+from streaming.replay import fresh_request, load_replay_rows, replay_loop, spread_publish
 
 
 def _row() -> ScoreRequest:
@@ -22,6 +23,11 @@ class RecordingPublisher:
 
     def publish(self, request: ScoreRequest) -> None:
         self.rows.append(request)
+
+
+def test_load_replay_rows_committed_payload_is_200() -> None:
+    rows = load_replay_rows(Path("ml/artifacts/replay_payload.json"))
+    assert len(rows) == 200
 
 
 def test_spread_publish_50_over_2000ms_uses_49_gaps() -> None:

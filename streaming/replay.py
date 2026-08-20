@@ -1,9 +1,30 @@
+import json
 from collections.abc import Callable
 from datetime import datetime, timezone
+from pathlib import Path
 from uuid import uuid4
 
-from api.schemas import ScoreRequest
+from api.schemas import Features, ScoreRequest
 from streaming.publisher import Publisher
+
+REPLAY_SIZE = 200
+
+
+def load_replay_rows(path: Path) -> list[ScoreRequest]:
+    raw = json.loads(path.read_text())
+    if not isinstance(raw, list) or len(raw) != REPLAY_SIZE:
+        n = len(raw) if isinstance(raw, list) else type(raw).__name__
+        raise ValueError(f"replay payload must contain exactly {REPLAY_SIZE} rows, got {n}")
+    now = datetime.now(timezone.utc)
+    return [
+        ScoreRequest(
+            transaction_id=uuid4(),
+            occurred_at=now,
+            amount=item["amount"],
+            features=Features.model_validate(item["features"]),
+        )
+        for item in raw
+    ]
 
 
 def fresh_request(

@@ -1,4 +1,6 @@
+import os
 import threading
+import time
 from collections.abc import Callable
 from pathlib import Path
 
@@ -6,8 +8,8 @@ from fastapi import FastAPI
 
 from api.burst import BURST_SIZE, BURST_WINDOW_MS, load_burst_rows
 from api.schemas import ScoreRequest
-from streaming.publisher import Publisher
-from streaming.replay import spread_publish
+from streaming.publisher import KafkaPublisher, Publisher
+from streaming.replay import load_replay_rows, replay_loop, spread_publish
 
 
 def create_producer_app(
@@ -33,5 +35,26 @@ def create_producer_app(
         else:
             _run()
         return {"accepted": True, "size": BURST_SIZE, "window_ms": BURST_WINDOW_MS}
+
+    return app
+
+
+def create_app() -> FastAPI:
+    publish = KafkaPublisher(os.environ.get("KAFKA_BOOTSTRAP", "redpanda:9092"))
+    app = create_producer_app(publish=publish, background_burst=True)
+
+    @app.on_event("startup")
+    def _start_replay() -> None:
+        rows = load_replay_rows(Path("ml/artifacts/replay_payload.json"))
+        threading.Thread(
+            target=replay_loop,
+            kwargs={
+                "rows": rows,
+                "publish": publish,
+                "sleep_fn": time.sleep,
+                "rate_per_sec": 10.0,
+            },
+            daemon=True,
+        ).start()
 
     return app

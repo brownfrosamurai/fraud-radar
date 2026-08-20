@@ -1,6 +1,6 @@
 # Fraud Radar
 
-Real-time fraud scoring demo (Slice 1: Isolation Forest + percentile `model_score`).
+Real-time fraud scoring demo (Slice 2: Redpanda stream + Postgres + live dashboard).
 
 ## Run
 
@@ -8,11 +8,11 @@ Real-time fraud scoring demo (Slice 1: Isolation Forest + percentile `model_scor
 docker compose up --build
 ```
 
-Open http://localhost:3000
+Open http://localhost:3000. The live feed should move within 10 seconds with no click. `POST /demo/burst` (the button) spreads 50 holdout fraud rows over 2 seconds.
 
 ## Models
 
-Isolation Forest is the default on `POST /score`. Optional `?model=autoencoder` (501 in Docker: the image has weights but not torch).
+Isolation Forest is the stream scorer and the default on `POST /score`. Optional `?model=autoencoder` remains 501 in Docker: the image has weights but not torch.
 
 Holdout evaluation (test split only, never accuracy):
 
