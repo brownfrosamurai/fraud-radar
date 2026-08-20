@@ -1,5 +1,6 @@
 import asyncio
 import os
+import time
 from collections.abc import Callable
 from contextlib import suppress
 from datetime import datetime, timezone
@@ -21,7 +22,17 @@ from api.db import create_engine_from_url
 from api.explain import explain
 from api.hub import StreamHub
 from api.postgres_store import PostgresStore
-from api.schemas import BurstResponse, ExplanationResponse, ScoreRequest, ScoredTransaction
+from api.schemas import (
+    AlertDir,
+    AlertFilter,
+    AlertSort,
+    AlertsResponse,
+    BurstResponse,
+    ExplanationResponse,
+    ScoreRequest,
+    ScoredTransaction,
+    StatsResponse,
+)
 from api.scoring import decide
 from api.serve import BundleScorer, Scorer, load_bundle
 from api.store import InMemoryStore, TransactionStore
@@ -151,22 +162,42 @@ def create_app(
         if model not in {"isolation_forest", "autoencoder"}:
             raise HTTPException(status_code=422, detail="unknown model")
         resolved = resolve_scorer()
+        started = time.perf_counter()
         try:
             model_score = resolved.score(body, model=model)
         except LookupError as exc:
             raise HTTPException(status_code=501, detail=str(exc)) from exc
+        decision = decide(model_score, body.amount)
+        scoring_ms = int((time.perf_counter() - started) * 1000)
         row = ScoredTransaction(
             id=body.transaction_id,
             occurred_at=body.occurred_at,
             amount=body.amount,
             model_score=model_score,
-            decision=decide(model_score, body.amount),
+            decision=decision,
             model_name=model,  # type: ignore[arg-type]
             features=body.features,
             created_at=datetime.now(timezone.utc),
+            scoring_ms=scoring_ms,
         )
         app.state.store.put(row)
         return row
+
+    @app.get("/stats", response_model=StatsResponse)
+    def get_stats() -> StatsResponse:
+        return app.state.store.stats(now=datetime.now(timezone.utc))
+
+    @app.get("/alerts", response_model=AlertsResponse)
+    def get_alerts(
+        filter: AlertFilter = Query(default="all"),
+        sort: AlertSort = Query(default="created_at"),
+        direction: AlertDir = Query(default="desc", alias="dir"),
+        offset: int = Query(default=0, ge=0),
+        limit: int = Query(default=10, ge=1, le=100),
+    ) -> AlertsResponse:
+        return app.state.store.list_alerts(
+            filter=filter, sort=sort, dir=direction, offset=offset, limit=limit
+        )
 
     @app.get("/transactions", response_model=list[ScoredTransaction])
     def get_transactions(limit: int = Query(default=50, ge=1, le=50)) -> list[ScoredTransaction]:

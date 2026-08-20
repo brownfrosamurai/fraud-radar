@@ -1,4 +1,5 @@
 import logging
+import time
 from collections.abc import Iterable
 from datetime import datetime, timezone
 from typing import Protocol
@@ -20,16 +21,20 @@ def parse_message(raw: bytes) -> ScoreRequest | None:
 
 
 def score_request(req: ScoreRequest, scorer: Scorer, now: datetime) -> ScoredTransaction:
+    started = time.perf_counter()
     model_score = scorer.score(req, model="isolation_forest")
+    decision = decide(model_score, req.amount)
+    scoring_ms = int((time.perf_counter() - started) * 1000)
     return ScoredTransaction(
         id=req.transaction_id,
         occurred_at=req.occurred_at,
         amount=req.amount,
         model_score=model_score,
-        decision=decide(model_score, req.amount),
+        decision=decision,
         model_name="isolation_forest",
         features=req.features,
         created_at=now,
+        scoring_ms=scoring_ms,
     )
 
 

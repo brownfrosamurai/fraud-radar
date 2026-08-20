@@ -56,6 +56,8 @@ def test_score_request_uses_isolation_forest_and_decide() -> None:
     assert row.model_name == "isolation_forest"
     assert row.decision == "BLOCK"
     assert row.model_score == 0.93
+    assert row.scoring_ms is not None
+    assert row.scoring_ms >= 0
 
 
 def test_run_consumer_skips_malformed_scores_and_flushes_exhausted_source() -> None:

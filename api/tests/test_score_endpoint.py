@@ -11,6 +11,7 @@ def test_post_score_default_model_is_isolation_forest(client) -> None:
     assert 0.0 <= body["model_score"] <= 1.0
     assert body["decision"] in {"ALLOW", "REVIEW", "BLOCK"}
     assert "explanation" not in body
+    assert "scoring_ms" not in body
 
 
 def test_post_score_invalid_model_is_422(client) -> None:
