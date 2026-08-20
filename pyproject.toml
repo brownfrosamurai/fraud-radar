@@ -7,18 +7,27 @@ dependencies = [
   "pydantic==2.10.4",
   "uvicorn[standard]==0.34.0",
   "httpx==0.28.1",
+  "numpy==2.2.1",
+  "scikit-learn==1.6.1",
+  "joblib==1.4.2",
 ]
 
 [project.optional-dependencies]
 dev = ["pytest==8.3.4"]
+ml = [
+  "pandas==2.2.3",
+  "torch==2.6.0",
+  "matplotlib==3.10.0",
+  "kagglehub==0.3.10",
+]
 
 [build-system]
 requires = ["setuptools>=75"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
-include = ["api*"]
+include = ["api*", "ml*"]
 
 [tool.pytest.ini_options]
 pythonpath = ["."]
-testpaths = ["api/tests"]
+testpaths = ["api/tests", "ml/tests"]
