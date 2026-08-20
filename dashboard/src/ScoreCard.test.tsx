@@ -12,8 +12,6 @@ const scored = {
   model_name: "isolation_forest",
 };
 
-const blocked = { ...scored, amount: 600, model_score: 0.93, decision: "BLOCK" };
-
 beforeEach(() => {
   vi.stubGlobal(
     "fetch",
