@@ -15,7 +15,7 @@ const scored = {
 beforeEach(() => {
   vi.stubGlobal(
     "fetch",
-    vi.fn(async (input: RequestInfo, init?: RequestInit) => {
+    vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       if (url.endsWith("/score") && init?.method === "POST") {
         return new Response(JSON.stringify(scored), { status: 200 });
@@ -85,7 +85,7 @@ test("failed API is distinct from waiting for transactions", async () => {
 test("burst failure shows error and does not stick injecting", async () => {
   const user = userEvent.setup();
   const fetchMock = vi.mocked(fetch);
-  fetchMock.mockImplementation(async (input: RequestInfo, init?: RequestInit) => {
+  fetchMock.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
     if (url.endsWith("/demo/burst") && init?.method === "POST") {
       throw new Error("network");
