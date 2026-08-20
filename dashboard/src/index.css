@@ -1,0 +1,22 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --allow: #16a34a;
+  --review: #f59e0b;
+  --block: #dc2626;
+  --bg: #121212;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: #e8e8e8;
+  font-family: "IBM Plex Sans", ui-sans-serif, sans-serif;
+}
+
+button:focus-visible {
+  outline: 2px solid #3ec6ff;
+  outline-offset: 2px;
+}
