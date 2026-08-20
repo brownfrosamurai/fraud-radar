@@ -2,9 +2,12 @@ from datetime import datetime
 from typing import Literal
 from uuid import UUID
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 Decision = Literal["ALLOW", "REVIEW", "BLOCK"]
+AlertFilter = Literal["all", "review", "block"]
+AlertSort = Literal["created_at", "amount", "model_score", "decision"]
+AlertDir = Literal["asc", "desc"]
 
 
 class Features(BaseModel):
@@ -55,6 +58,22 @@ class ScoredTransaction(BaseModel):
     model_name: Literal["isolation_forest", "autoencoder"]
     features: Features
     created_at: datetime
+    scoring_ms: int | None = Field(default=None, exclude=True)
+
+
+class StatsResponse(BaseModel):
+    processed: int
+    throughput_tx_per_s: float
+    latency_p50_ms: int | None
+    latency_p95_ms: int | None
+    flagged: int
+
+
+class AlertsResponse(BaseModel):
+    items: list[ScoredTransaction]
+    total: int
+    offset: int
+    limit: int
 
 
 class FeatureContribution(BaseModel):

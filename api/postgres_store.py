@@ -1,12 +1,21 @@
+from datetime import datetime
 from uuid import UUID
 
 from sqlalchemy import select
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session
 
-from api.db import ScoredTransactionRow, create_tables
-from api.schemas import Features, ScoredTransaction
-from api.store import LIST_CAP
+from api.db import ScoredTransactionRow, create_tables, ensure_scoring_ms_column
+from api.schemas import (
+    AlertDir,
+    AlertFilter,
+    AlertSort,
+    AlertsResponse,
+    Features,
+    ScoredTransaction,
+    StatsResponse,
+)
+from api.store import LIST_CAP, list_alerts_from_rows, stats_from_rows
 
 
 def _to_orm(row: ScoredTransaction) -> ScoredTransactionRow:
@@ -19,6 +28,7 @@ def _to_orm(row: ScoredTransaction) -> ScoredTransactionRow:
         model_name=row.model_name,
         features=row.features.model_dump(),
         created_at=row.created_at,
+        scoring_ms=row.scoring_ms,
     )
 
 
@@ -32,6 +42,7 @@ def _from_orm(row: ScoredTransactionRow) -> ScoredTransaction:
         model_name=row.model_name,  # type: ignore[arg-type]
         features=Features.model_validate(row.features),
         created_at=row.created_at,
+        scoring_ms=row.scoring_ms,
     )
 
 
@@ -39,6 +50,7 @@ class PostgresStore:
     def __init__(self, engine: Engine) -> None:
         self._engine = engine
         create_tables(engine)
+        ensure_scoring_ms_column(engine)
 
     def put(self, row: ScoredTransaction) -> None:
         self.put_many([row])
@@ -63,3 +75,29 @@ class PostgresStore:
                 .limit(cap)
             )
             return [_from_orm(row) for row in session.scalars(stmt)]
+
+    def _load_all(self) -> list[ScoredTransaction]:
+        with Session(self._engine) as session:
+            stmt = select(ScoredTransactionRow)
+            return [_from_orm(row) for row in session.scalars(stmt)]
+
+    def stats(self, *, now: datetime) -> StatsResponse:
+        return stats_from_rows(self._load_all(), now=now)
+
+    def list_alerts(
+        self,
+        *,
+        filter: AlertFilter,
+        sort: AlertSort,
+        dir: AlertDir,
+        offset: int,
+        limit: int,
+    ) -> AlertsResponse:
+        return list_alerts_from_rows(
+            self._load_all(),
+            filter=filter,
+            sort=sort,
+            dir=dir,
+            offset=offset,
+            limit=limit,
+        )
