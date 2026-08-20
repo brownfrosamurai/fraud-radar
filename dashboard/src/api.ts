@@ -18,28 +18,15 @@ export type BurstResponse = {
   cooldown_seconds: number;
 };
 
-export async function postScore(amount: number): Promise<ScoredTransaction> {
-  const features: Record<string, number> = { Time: 0 };
-  for (let i = 1; i <= 28; i += 1) features[`V${i}`] = 0;
-  const res = await fetch("/api/score", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      transaction_id: crypto.randomUUID(),
-      occurred_at: new Date().toISOString(),
-      amount,
-      features,
-    }),
-  });
-  if (!res.ok) throw new Error("score failed");
-  return res.json();
+export function streamUrl(): string {
+  const proto = location.protocol === "https:" ? "wss:" : "ws:";
+  return `${proto}//${location.host}/api/stream`;
 }
 
-export async function fetchLatest(): Promise<ScoredTransaction | null> {
-  const res = await fetch("/api/transactions?limit=1");
+export async function fetchRecent(limit = 50): Promise<ScoredTransaction[]> {
+  const res = await fetch(`/api/transactions?limit=${limit}`);
   if (!res.ok) throw new Error("list failed");
-  const rows: ScoredTransaction[] = await res.json();
-  return rows[0] ?? null;
+  return res.json();
 }
 
 export async function fetchExplanation(
