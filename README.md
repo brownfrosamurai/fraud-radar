@@ -1,6 +1,6 @@
 # Fraud Radar
 
-Real-time fraud scoring demo (Slice 0 walking skeleton).
+Real-time fraud scoring demo (Slice 1: Isolation Forest + percentile `model_score`).
 
 ## Run
 
@@ -8,9 +8,22 @@ Real-time fraud scoring demo (Slice 0 walking skeleton).
 docker compose up --build
 ```
 
-Open <http://localhost:3000> — one card polls the score API, shows ALLOW/REVIEW/BLOCK, and the burst button injects 50 high-risk rows with a 30s cooldown.
+Open http://localhost:3000
 
-API: <http://localhost:8000/health> · OpenAPI: <http://localhost:8000/docs>
+## Models
+
+Isolation Forest is the default on `POST /score`. Optional `?model=autoencoder` (501 if weights are not in the image).
+
+Holdout evaluation (test split only, never accuracy):
+
+| Model | PR-AUC | Precision@0.9 | Recall@0.9 | F1@0.9 |
+|---|---|---|---|---|
+| Isolation Forest | 0.0297 | 0.0122 | 0.9067 | 0.0240 |
+| Autoencoder | 0.0781 | 0.0088 | 0.8533 | 0.0175 |
+
+`model_score` is a training-set percentile in `[0, 1]`. `decide()` composes that score with the amount rule.
+
+Retrain (needs Kaggle credentials): `python -m ml.download_data && python -m ml.train`
 
 ## Dev without Docker
 
@@ -27,6 +40,6 @@ cd dashboard && npm install && npm run dev
 ## Tests
 
 ```bash
-pytest api/tests -v
+pytest -v
 cd dashboard && npm test
 ```

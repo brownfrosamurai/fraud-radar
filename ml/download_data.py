@@ -14,3 +14,7 @@ def download_creditcard(dest: Path) -> Path:
         raise FileNotFoundError("creditcard.csv not in kagglehub cache")
     dest.write_bytes(matches[0].read_bytes())
     return dest
+
+
+if __name__ == "__main__":
+    download_creditcard(Path("data/raw/creditcard.csv"))
