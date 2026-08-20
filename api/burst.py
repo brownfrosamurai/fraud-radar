@@ -1,16 +1,19 @@
+import json
 import threading
 from collections.abc import Callable
-from datetime import datetime
+from datetime import datetime, timezone
+from pathlib import Path
 from uuid import uuid4
 
 from api.schemas import BurstResponse, Features, ScoreRequest, ScoredTransaction
-from api.scoring import decide, score
+from api.scoring import decide
 from api.serve import Scorer
 from api.store import InMemoryStore
 
 BURST_SIZE = 50
 BURST_WINDOW_MS = 2000
 COOLDOWN_SECONDS = 30
+BURST_PAYLOAD_PATH = Path("ml/artifacts/burst_payload.json")
 
 
 class CooldownActive(Exception):
@@ -18,9 +21,18 @@ class CooldownActive(Exception):
         self.remaining = remaining
 
 
-def _zero_features() -> Features:
-    payload = {"Time": 0.0, **{f"V{i}": 0.0 for i in range(1, 29)}}
-    return Features.model_validate(payload)
+def load_burst_rows(path: Path) -> list[ScoreRequest]:
+    raw = json.loads(path.read_text())
+    now = datetime.now(timezone.utc)
+    return [
+        ScoreRequest(
+            transaction_id=uuid4(),
+            occurred_at=now,
+            amount=item["amount"],
+            features=Features.model_validate(item["features"]),
+        )
+        for item in raw
+    ]
 
 
 class BurstController:
@@ -28,13 +40,13 @@ class BurstController:
         self,
         store: InMemoryStore,
         clock: Callable[[], datetime],
+        scorer: Scorer | None,
         burst_rows: list[ScoreRequest] | None = None,
-        scorer: Scorer | None = None,
     ) -> None:
         self._store = store
         self._clock = clock
-        self._burst_rows = burst_rows
         self._scorer = scorer
+        self._burst_rows = burst_rows
         self._last_burst_at: datetime | None = None
         # Cooldown check + inserts must be one critical section vs concurrent POSTs.
         self._lock = threading.Lock()
@@ -47,14 +59,18 @@ class BurstController:
                 remaining = int(COOLDOWN_SECONDS - elapsed)
                 if remaining > 0:
                     raise CooldownActive(remaining)
-            for i in range(BURST_SIZE):
+            rows = self._burst_rows
+            if rows is None:
+                rows = load_burst_rows(BURST_PAYLOAD_PATH)
+                self._burst_rows = rows
+            for src in rows:
                 req = ScoreRequest(
                     transaction_id=uuid4(),
                     occurred_at=now,
-                    amount=501.0 + i,
-                    features=_zero_features(),
+                    amount=src.amount,
+                    features=src.features,
                 )
-                model_score = score(req, scorer=self._scorer)
+                model_score = self._scorer.score(req, model="isolation_forest")
                 self._store.put(
                     ScoredTransaction(
                         id=req.transaction_id,

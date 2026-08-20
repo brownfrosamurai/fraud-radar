@@ -24,7 +24,7 @@ def create_app(
     # Defer load_bundle until first score: artifacts are not in-tree until a later task.
     app.state.scorer = scorer
     app.state.burst = BurstController(
-        store=app.state.store, clock=time_fn, burst_rows=burst_rows, scorer=scorer
+        store=app.state.store, clock=time_fn, scorer=app.state.scorer, burst_rows=burst_rows
     )
 
     @app.get("/health")
