@@ -8,9 +8,21 @@ from sklearn.ensemble import IsolationForest
 from sklearn.preprocessing import QuantileTransformer, StandardScaler
 
 from api.main import create_app
-from api.schemas import Features, ScoreRequest
 from api.serve import BundleScorer, ConstScorer, ModelBundle
 from api.store import InMemoryStore
+
+
+class FakeProducer:
+    def __init__(self) -> None:
+        self.calls = 0
+        self.fail = False
+
+    def trigger_burst(self) -> None:
+        from api.burst import ProducerUnavailable
+
+        if self.fail:
+            raise ProducerUnavailable()
+        self.calls += 1
 
 
 class FrozenClock:
@@ -67,29 +79,26 @@ def scorer() -> BundleScorer:
 
 
 @pytest.fixture
-def client(store: InMemoryStore, clock: FrozenClock, scorer: BundleScorer) -> TestClient:
-    return TestClient(create_app(store=store, clock=clock, scorer=scorer))
+def producer() -> FakeProducer:
+    return FakeProducer()
 
 
-def _payload_row(v14: float = -3.0) -> ScoreRequest:
-    feats = sample_features(V14=v14)
-    return ScoreRequest(
-        transaction_id=uuid4(),
-        occurred_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
-        amount=1.0,
-        features=Features.model_validate(feats),
+@pytest.fixture
+def client(
+    store: InMemoryStore,
+    clock: FrozenClock,
+    scorer: BundleScorer,
+    producer: FakeProducer,
+) -> TestClient:
+    return TestClient(
+        create_app(store=store, clock=clock, scorer=scorer, producer=producer)
     )
 
 
 @pytest.fixture
-def burst_rows() -> list[ScoreRequest]:
-    return [_payload_row(v14=-3.0) for _ in range(50)]
-
-
-@pytest.fixture
 def burst_client(
-    store: InMemoryStore, clock: FrozenClock, burst_rows: list[ScoreRequest]
+    store: InMemoryStore, clock: FrozenClock, producer: FakeProducer
 ) -> TestClient:
     return TestClient(
-        create_app(store=store, clock=clock, scorer=ConstScorer(0.93), burst_rows=burst_rows)
+        create_app(store=store, clock=clock, scorer=ConstScorer(0.93), producer=producer)
     )

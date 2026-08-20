@@ -3,12 +3,12 @@ import threading
 from collections.abc import Callable
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Protocol
 from uuid import uuid4
 
-from api.schemas import BurstResponse, Features, ScoreRequest, ScoredTransaction
-from api.scoring import decide
-from api.serve import Scorer
-from api.store import InMemoryStore
+import httpx
+
+from api.schemas import BurstResponse, Features, ScoreRequest
 
 BURST_SIZE = 50
 BURST_WINDOW_MS = 2000
@@ -19,6 +19,28 @@ BURST_PAYLOAD_PATH = Path("ml/artifacts/burst_payload.json")
 class CooldownActive(Exception):
     def __init__(self, remaining: int) -> None:
         self.remaining = remaining
+
+
+class ProducerClient(Protocol):
+    def trigger_burst(self) -> None: ...
+
+
+class ProducerUnavailable(Exception):
+    pass
+
+
+class HttpProducerClient:
+    def __init__(self, base_url: str, timeout: float = 2.0) -> None:
+        self._url = base_url.rstrip("/") + "/burst"
+        self._timeout = timeout
+
+    def trigger_burst(self) -> None:
+        try:
+            res = httpx.post(self._url, timeout=self._timeout)
+        except httpx.RequestError as exc:
+            raise ProducerUnavailable from exc
+        if not 200 <= res.status_code < 300:
+            raise ProducerUnavailable
 
 
 def load_burst_rows(path: Path) -> list[ScoreRequest]:
@@ -41,23 +63,13 @@ def load_burst_rows(path: Path) -> list[ScoreRequest]:
 class BurstController:
     def __init__(
         self,
-        store: InMemoryStore,
         clock: Callable[[], datetime],
-        scorer: Scorer | None,
-        burst_rows: list[ScoreRequest] | None = None,
-        resolve_scorer: Callable[[], Scorer] | None = None,
+        producer: ProducerClient,
     ) -> None:
-        self._store = store
         self._clock = clock
-        self._scorer = scorer
-        self._burst_rows = burst_rows
-        self._resolve_scorer = resolve_scorer
+        self._producer = producer
         self._last_burst_at: datetime | None = None
-        # Cooldown check + inserts must be one critical section vs concurrent POSTs.
         self._lock = threading.Lock()
-
-    def bind_scorer(self, scorer: Scorer) -> None:
-        self._scorer = scorer
 
     def trigger(self) -> BurstResponse:
         with self._lock:
@@ -67,37 +79,7 @@ class BurstController:
                 remaining = int(COOLDOWN_SECONDS - elapsed)
                 if remaining > 0:
                     raise CooldownActive(remaining)
-            if self._resolve_scorer is not None:
-                self._scorer = self._resolve_scorer()
-            rows = self._burst_rows
-            if rows is None:
-                rows = load_burst_rows(BURST_PAYLOAD_PATH)
-                self._burst_rows = rows
-            rows = rows[:BURST_SIZE]
-            if len(rows) != BURST_SIZE:
-                raise ValueError(
-                    f"burst requires exactly {BURST_SIZE} rows, got {len(rows)}"
-                )
-            for src in rows:
-                req = ScoreRequest(
-                    transaction_id=uuid4(),
-                    occurred_at=now,
-                    amount=src.amount,
-                    features=src.features,
-                )
-                model_score = self._scorer.score(req, model="isolation_forest")
-                self._store.put(
-                    ScoredTransaction(
-                        id=req.transaction_id,
-                        occurred_at=req.occurred_at,
-                        amount=req.amount,
-                        model_score=model_score,
-                        decision=decide(model_score, req.amount),
-                        model_name="isolation_forest",
-                        features=req.features,
-                        created_at=now,
-                    )
-                )
+            self._producer.trigger_burst()
             self._last_burst_at = now
             return BurstResponse(
                 accepted=True,
