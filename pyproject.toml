@@ -12,6 +12,7 @@ dependencies = [
   "joblib==1.4.2",
   "sqlalchemy==2.0.36",
   "psycopg[binary]==3.2.4",
+  "kafka-python==2.2.15",
 ]
 
 [project.optional-dependencies]
@@ -28,8 +29,8 @@ requires = ["setuptools>=75"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
-include = ["api*", "ml*"]
+include = ["api*", "ml*", "streaming*"]
 
 [tool.pytest.ini_options]
 pythonpath = ["."]
-testpaths = ["api/tests", "ml/tests"]
+testpaths = ["api/tests", "ml/tests", "streaming/tests"]
