@@ -8,6 +8,14 @@ from api.main import create_app
 from api.store import InMemoryStore
 
 
+class FrozenClock:
+    def __init__(self, t: datetime) -> None:
+        self.t = t
+
+    def __call__(self) -> datetime:
+        return self.t
+
+
 def sample_features(**overrides: float) -> dict[str, float]:
     data = {"Time": 0.0}
     for i in range(1, 29):
@@ -31,5 +39,10 @@ def store() -> InMemoryStore:
 
 
 @pytest.fixture
-def client(store: InMemoryStore) -> TestClient:
-    return TestClient(create_app(store=store))
+def clock() -> FrozenClock:
+    return FrozenClock(datetime(2026, 1, 1, tzinfo=timezone.utc))
+
+
+@pytest.fixture
+def client(store: InMemoryStore, clock: FrozenClock) -> TestClient:
+    return TestClient(create_app(store=store, clock=clock))

@@ -1,20 +1,43 @@
+from collections.abc import Callable
 from datetime import datetime, timezone
 from uuid import UUID
 
 from fastapi import FastAPI, HTTPException, Query
+from fastapi.responses import JSONResponse
 
+from api.burst import BURST_SIZE, BURST_WINDOW_MS, BurstController, CooldownActive
 from api.schemas import ExplanationResponse, ScoreRequest, ScoredTransaction
 from api.scoring import decide, explain, score
 from api.store import InMemoryStore
 
 
-def create_app(store: InMemoryStore | None = None) -> FastAPI:
+def create_app(
+    store: InMemoryStore | None = None,
+    clock: Callable[[], datetime] | None = None,
+) -> FastAPI:
     app = FastAPI(title="Fraud Radar")
     app.state.store = store or InMemoryStore()
+    time_fn = clock or (lambda: datetime.now(timezone.utc))
+    app.state.burst = BurstController(store=app.state.store, clock=time_fn)
 
     @app.get("/health")
     def health() -> dict[str, str]:
         return {"status": "ok"}
+
+    @app.post("/demo/burst")
+    def post_burst():
+        try:
+            return app.state.burst.trigger()
+        except CooldownActive as exc:
+            return JSONResponse(
+                status_code=429,
+                content={
+                    "accepted": False,
+                    "size": BURST_SIZE,
+                    "window_ms": BURST_WINDOW_MS,
+                    "cooldown_seconds": exc.remaining,
+                },
+            )
 
     @app.post("/score", response_model=ScoredTransaction)
     def post_score(body: ScoreRequest) -> ScoredTransaction:
