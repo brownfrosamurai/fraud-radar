@@ -8,6 +8,7 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
+import pandas as pd
 from sklearn.metrics import (
     average_precision_score,
     f1_score,
@@ -54,7 +55,7 @@ def save_pr_curve(
 
 
 def compare_models(
-    train_df, test_df
+    train_df: pd.DataFrame, test_df: pd.DataFrame
 ) -> tuple[dict[str, dict[str, float]], dict[str, np.ndarray], np.ndarray]:
     from sklearn.preprocessing import QuantileTransformer
 
@@ -97,8 +98,6 @@ def main() -> None:
         else:
             print("run ml/evaluate.py after training")
         return
-
-    import pandas as pd
 
     from ml.split import time_ordered_split
 

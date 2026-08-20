@@ -55,3 +55,37 @@ def test_bundle_scorer_autoencoder_unit_interval() -> None:
     req = ScoreRequest.model_validate(sample_request())
     value = BundleScorer(bundle).score(req, model="autoencoder")
     assert 0.0 <= value <= 1.0
+
+
+def test_load_bundle_autoencoder_state_dict_round_trip(tmp_path) -> None:
+    pytest.importorskip("torch")
+    import joblib
+    import torch
+
+    from api.serve import load_bundle
+    from ml.train_autoencoder import fit_autoencoder, raw_ae_score
+
+    src = tiny_if_bundle()
+    rng = np.random.default_rng(0)
+    legit = pd.DataFrame(
+        [{name: float(rng.normal()) for name in FEATURE_COLUMNS} for _ in range(60)]
+    )
+    Xs = src.scaler.transform(dataframe_to_array(legit))
+    ae = fit_autoencoder(Xs, epochs=1, batch_size=16, seed=42)
+    raw = raw_ae_score(ae, Xs)
+    ae_cdf = QuantileTransformer(
+        output_distribution="uniform", n_quantiles=min(60, 1000), random_state=42
+    ).fit(raw.reshape(-1, 1))
+
+    joblib.dump(src.scaler, tmp_path / "scaler.joblib")
+    joblib.dump(src.isolation_forest, tmp_path / "isolation_forest.joblib")
+    joblib.dump(src.if_cdf, tmp_path / "if_cdf.joblib")
+    torch.save(ae.state_dict(), tmp_path / "autoencoder.pt")
+    joblib.dump(ae_cdf, tmp_path / "ae_cdf.joblib")
+
+    loaded = load_bundle(tmp_path)
+    assert loaded.autoencoder is not None
+    assert loaded.ae_cdf is not None
+    req = ScoreRequest.model_validate(sample_request())
+    value = BundleScorer(loaded).score(req, model="autoencoder")
+    assert 0.0 <= value <= 1.0
