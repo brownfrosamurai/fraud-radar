@@ -1,4 +1,4 @@
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { Workspace } from "./Workspace";
@@ -56,6 +56,9 @@ let explainItems = [
   { feature: "V14", contribution: 0.21 },
 ];
 let explainGate: Promise<void> | null = null;
+let lastAlertsUrl = "";
+let alertItems: typeof scored[] = [];
+let alertTotal = 0;
 
 beforeEach(() => {
   FakeWebSocket.instances = [];
@@ -68,7 +71,11 @@ beforeEach(() => {
     { feature: "V14", contribution: 0.21 },
   ];
   explainGate = null;
+  lastAlertsUrl = "";
+  alertItems = [];
+  alertTotal = 0;
   vi.stubGlobal("WebSocket", FakeWebSocket);
+  vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue(null);
   vi.stubGlobal(
     "fetch",
     vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -99,8 +106,9 @@ beforeEach(() => {
         );
       }
       if (url.includes("/alerts")) {
+        lastAlertsUrl = url;
         return new Response(
-          JSON.stringify({ items: [], total: 0, offset: 0, limit: 10 }),
+          JSON.stringify({ items: alertItems, total: alertTotal, offset: 0, limit: 10 }),
           { status: 200 },
         );
       }
@@ -137,6 +145,7 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.unstubAllGlobals();
+  vi.restoreAllMocks();
 });
 
 test("does not POST /score on mount", async () => {
@@ -151,7 +160,7 @@ test("renders a live row from the websocket", async () => {
   await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
   act(() => FakeWebSocket.instances[0].emit(scored));
   expect(await screen.findByText("ALLOW")).toBeInTheDocument();
-  expect(screen.queryByText("Amount")).not.toBeInTheDocument();
+  expect(within(screen.getByTestId("explain-body")).queryByText("Amount")).not.toBeInTheDocument();
 });
 
 test("burst button disables for cooldown_seconds", async () => {
@@ -283,7 +292,7 @@ test("does not apply a stale explanation to a newer selection", async () => {
   await user.click(screen.getByText("$800.00"));
   act(() => releaseFirst());
   expect(await screen.findByText("V14")).toBeInTheDocument();
-  expect(screen.queryByText("Amount")).not.toBeInTheDocument();
+  expect(within(screen.getByTestId("explain-body")).queryByText("Amount")).not.toBeInTheDocument();
 });
 
 test("501 shows autoencoder isn’t loaded", async () => {
@@ -307,4 +316,41 @@ test("ALLOW feed row is not a button", async () => {
   act(() => FakeWebSocket.instances[0].emit(scored));
   expect(await screen.findByTestId("feed-row")).toBeInTheDocument();
   expect(screen.queryByRole("button", { name: /\$20\.00/i })).not.toBeInTheDocument();
+});
+
+test("feed scores fill the histogram canvas", async () => {
+  render(<Workspace />);
+  await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
+  act(() => FakeWebSocket.instances[0].emit({ ...scored, decision: "BLOCK", model_score: 0.9 }));
+  expect(await screen.findByTestId("score-hist")).toBeInTheDocument();
+  expect(screen.getByTestId("fraud-rate")).toBeInTheDocument();
+});
+
+test("alert header click sorts by amount desc and resets offset", async () => {
+  const user = userEvent.setup();
+  alertItems = [{ ...scored, decision: "BLOCK", amount: 900, model_score: 0.95 }];
+  alertTotal = 1;
+  render(<Workspace />);
+  await user.click(await screen.findByRole("columnheader", { name: /amount/i }));
+  expect(lastAlertsUrl).toMatch(/sort=amount/);
+  expect(lastAlertsUrl).toMatch(/dir=desc/);
+  expect(lastAlertsUrl).toMatch(/offset=0/);
+});
+
+test("load more increases offset", async () => {
+  const user = userEvent.setup();
+  alertItems = [{ ...scored, decision: "REVIEW", amount: 80, model_score: 0.5 }];
+  alertTotal = 25;
+  render(<Workspace />);
+  await user.click(await screen.findByRole("button", { name: /load more/i }));
+  expect(lastAlertsUrl).toMatch(/offset=10/);
+});
+
+test("clicking an alert row opens explanation", async () => {
+  const user = userEvent.setup();
+  alertItems = [{ ...scored, id: "alert-1", decision: "BLOCK", amount: 777, model_score: 0.99 }];
+  alertTotal = 1;
+  render(<Workspace />);
+  await user.click(await screen.findByText("$777.00"));
+  expect(await screen.findAllByTestId("explain-bar")).not.toHaveLength(0);
 });

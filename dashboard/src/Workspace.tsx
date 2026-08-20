@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import {
+  fetchAlerts,
   fetchExplanation,
   fetchRecent,
   fetchStats,
@@ -10,7 +11,19 @@ import {
   type ScoredTransaction,
   type Stats,
 } from "./api";
+import { drawHistogram, drawRate, pushRate, pushScore, type RateBucket } from "./charts";
 import { nextReconnectDelay } from "./reconnect";
+
+type AlertFilter = "all" | "review" | "block";
+type AlertSort = "created_at" | "amount" | "model_score" | "decision";
+type AlertDir = "asc" | "desc";
+
+const SORT_HEADERS: { key: AlertSort; label: string }[] = [
+  { key: "created_at", label: "Time" },
+  { key: "amount", label: "Amount" },
+  { key: "model_score", label: "Score" },
+  { key: "decision", label: "Decision" },
+];
 
 const BADGE: Record<Decision, string> = {
   ALLOW: "allow",
@@ -54,7 +67,20 @@ export function Workspace() {
   const [reconnecting, setReconnecting] = useState(false);
   const [explaining, setExplaining] = useState(false);
   const [stats, setStats] = useState<Stats | null>(null);
+  const [alertFilter, setAlertFilter] = useState<AlertFilter>("all");
+  const [alertSort, setAlertSort] = useState<AlertSort>("created_at");
+  const [alertDir, setAlertDir] = useState<AlertDir>("desc");
+  const [alertOffset, setAlertOffset] = useState(0);
+  const [alertItems, setAlertItems] = useState<ScoredTransaction[]>([]);
+  const [alertTotal, setAlertTotal] = useState(0);
+  const [alertsError, setAlertsError] = useState(false);
+  const [alertsEpoch, setAlertsEpoch] = useState(0);
+  const [alertsLoaded, setAlertsLoaded] = useState(false);
   const selectedId = useRef<string | null>(null);
+  const histCanvasRef = useRef<HTMLCanvasElement>(null);
+  const rateCanvasRef = useRef<HTMLCanvasElement>(null);
+  const scoresRef = useRef<number[]>([]);
+  const bucketsRef = useRef<RateBucket[]>([]);
 
   async function loadExplanation(row: ScoredTransaction) {
     selectedId.current = row.id;
@@ -104,6 +130,41 @@ export function Workspace() {
 
   useEffect(() => {
     let cancelled = false;
+
+    async function load() {
+      try {
+        const result = await fetchAlerts({
+          filter: alertFilter,
+          sort: alertSort,
+          dir: alertDir,
+          offset: alertOffset,
+          limit: 10,
+        });
+        if (cancelled) return;
+        if (result.status === 200 && result.body) {
+          setAlertItems(result.body.items);
+          setAlertTotal(result.body.total);
+          setAlertsError(false);
+        } else {
+          setAlertsError(true);
+        }
+        setAlertsLoaded(true);
+      } catch {
+        if (!cancelled) {
+          setAlertsError(true);
+          setAlertsLoaded(true);
+        }
+      }
+    }
+
+    void load();
+    return () => {
+      cancelled = true;
+    };
+  }, [alertFilter, alertSort, alertDir, alertOffset, alertsEpoch]);
+
+  useEffect(() => {
+    let cancelled = false;
     let socket: WebSocket | null = null;
     let reconnectTimer: number | null = null;
     let attempt = 0;
@@ -111,6 +172,17 @@ export function Workspace() {
 
     function maybeSelect(row: ScoredTransaction) {
       if (row.decision !== "ALLOW") void loadExplanation(row);
+    }
+
+    function ingestCharts(row: ScoredTransaction) {
+      scoresRef.current = pushScore(scoresRef.current, row.model_score);
+      bucketsRef.current = pushRate(
+        bucketsRef.current,
+        Date.parse(row.occurred_at),
+        row.decision !== "ALLOW",
+      );
+      if (histCanvasRef.current) drawHistogram(histCanvasRef.current, scoresRef.current);
+      if (rateCanvasRef.current) drawRate(rateCanvasRef.current, bucketsRef.current);
     }
 
     function scheduleReconnect(
@@ -175,7 +247,12 @@ export function Workspace() {
       currentSocket.onmessage = (event) => {
         if (cancelled || socket !== currentSocket || generation !== currentGeneration) return;
         const row = JSON.parse(event.data) as ScoredTransaction;
+        ingestCharts(row);
         setRows((current) => mergeNewest(current, [row]));
+        if (row.decision !== "ALLOW") {
+          setAlertOffset(0);
+          setAlertsEpoch((n) => n + 1);
+        }
         if (!selectedId.current) maybeSelect(row);
       };
       currentSocket.onclose = () =>
@@ -234,6 +311,16 @@ export function Workspace() {
     : cooldown > 0
       ? `Cooldown ${cooldown}s`
       : "Inject Synthetic Burst";
+  const canLoadMore = alertOffset + alertItems.length < alertTotal;
+
+  function onAlertSort(column: AlertSort) {
+    if (column === alertSort) {
+      setAlertDir((current) => (current === "asc" ? "desc" : "asc"));
+    } else {
+      setAlertSort(column);
+    }
+    setAlertOffset(0);
+  }
 
   return (
     <div className="console">
@@ -340,7 +427,7 @@ export function Workspace() {
           <div className="panel-header">
             <h2>Explainability</h2>
           </div>
-          <div className="explain-body">
+          <div className="explain-body" data-testid="explain-body">
             {selected ? (
               <>
                 <p className="explain-meta">
@@ -394,7 +481,7 @@ export function Workspace() {
               <span className="panel-meta">last 200 scored · rolling</span>
             </div>
             <div className="chart-body">
-              <canvas data-testid="score-hist" />
+              <canvas ref={histCanvasRef} data-testid="score-hist" width={640} height={160} />
             </div>
           </div>
           <div className="chart-panel">
@@ -403,7 +490,7 @@ export function Workspace() {
               <span className="panel-meta">last 10 min</span>
             </div>
             <div className="chart-body">
-              <canvas data-testid="fraud-rate" />
+              <canvas ref={rateCanvasRef} data-testid="fraud-rate" width={640} height={160} />
             </div>
           </div>
         </div>
@@ -411,6 +498,70 @@ export function Workspace() {
         <div className="alerts-panel">
           <div className="panel-header">
             <h2>Alerts — case review</h2>
+            <select
+              className="alerts-filter"
+              aria-label="Alert filter"
+              value={alertFilter}
+              onChange={(event) => {
+                setAlertFilter(event.target.value as AlertFilter);
+                setAlertOffset(0);
+              }}
+            >
+              <option value="all">All flagged</option>
+              <option value="review">Review only</option>
+              <option value="block">Blocked only</option>
+            </select>
+          </div>
+          <table className="alerts-table">
+            <thead>
+              <tr>
+                {SORT_HEADERS.map((header) => (
+                  <th key={header.key} scope="col" onClick={() => onAlertSort(header.key)}>
+                    <button type="button">{header.label}</button>
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {alertItems.length > 0 ? (
+                alertItems.map((row) => (
+                  <tr
+                    key={row.id}
+                    className={selected?.id === row.id ? "active" : undefined}
+                    onClick={() => void loadExplanation(row)}
+                  >
+                    <td className="num">{formatTime(row.occurred_at)}</td>
+                    <td className="num">${row.amount.toFixed(2)}</td>
+                    <td className="num">{row.model_score.toFixed(2)}</td>
+                    <td>
+                      <span className={`badge ${BADGE[row.decision]}`}>{row.decision}</span>
+                    </td>
+                  </tr>
+                ))
+              ) : (
+                <tr>
+                  <td colSpan={4} className="alerts-empty">
+                    {alertsError ? null : "No flagged transactions yet"}
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+          <div className="alerts-footer">
+            {alertsLoaded ? (
+              <button
+                type="button"
+                disabled={!canLoadMore}
+                onClick={() => setAlertOffset((current) => current + 10)}
+              >
+                Load more
+              </button>
+            ) : null}
+            {alertsError ? (
+              <button type="button" onClick={() => setAlertsEpoch((n) => n + 1)}>
+                Retry
+              </button>
+            ) : null}
           </div>
         </div>
       </div>
