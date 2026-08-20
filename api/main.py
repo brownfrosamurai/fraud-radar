@@ -1,9 +1,10 @@
 from datetime import datetime, timezone
+from uuid import UUID
 
-from fastapi import FastAPI, Query
+from fastapi import FastAPI, HTTPException, Query
 
-from api.schemas import ScoreRequest, ScoredTransaction
-from api.scoring import decide, score
+from api.schemas import ExplanationResponse, ScoreRequest, ScoredTransaction
+from api.scoring import decide, explain, score
 from api.store import InMemoryStore
 
 
@@ -34,6 +35,13 @@ def create_app(store: InMemoryStore | None = None) -> FastAPI:
     @app.get("/transactions", response_model=list[ScoredTransaction])
     def get_transactions(limit: int = Query(default=50, ge=1, le=50)) -> list[ScoredTransaction]:
         return app.state.store.list_recent(limit=limit)
+
+    @app.get("/transactions/{transaction_id}/explanation", response_model=ExplanationResponse)
+    def get_explanation(transaction_id: UUID) -> ExplanationResponse:
+        row = app.state.store.get(transaction_id)
+        if row is None:
+            raise HTTPException(status_code=404, detail="transaction not found")
+        return ExplanationResponse(transaction_id=transaction_id, explanation=explain(row))
 
     return app
 
