@@ -1,4 +1,5 @@
 import json
+import math
 import threading
 from collections.abc import Callable
 from datetime import datetime, timezone
@@ -76,8 +77,8 @@ class BurstController:
             now = self._clock()
             if self._last_burst_at is not None:
                 elapsed = (now - self._last_burst_at).total_seconds()
-                remaining = int(COOLDOWN_SECONDS - elapsed)
-                if remaining > 0:
+                if elapsed < COOLDOWN_SECONDS:
+                    remaining = math.ceil(COOLDOWN_SECONDS - elapsed)
                     raise CooldownActive(remaining)
             self._producer.trigger_burst()
             self._last_burst_at = now

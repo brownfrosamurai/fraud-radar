@@ -46,9 +46,20 @@ def test_burst_cooldown_is_429_and_does_not_call_producer(
     assert producer.calls == 1
 
 
-def test_burst_accepted_after_cooldown(burst_client, clock, producer) -> None:
+def test_burst_still_cooling_down_just_before_30_seconds(
+    burst_client, clock, producer
+) -> None:
     burst_client.post("/demo/burst")
-    clock.t = clock.t + timedelta(seconds=31)
+    clock.t = clock.t + timedelta(seconds=29.9)
+    res = burst_client.post("/demo/burst")
+    assert res.status_code == 429
+    assert res.json()["cooldown_seconds"] == 1
+    assert producer.calls == 1
+
+
+def test_burst_accepted_at_exactly_30_seconds(burst_client, clock, producer) -> None:
+    burst_client.post("/demo/burst")
+    clock.t = clock.t + timedelta(seconds=30)
     res = burst_client.post("/demo/burst")
     assert res.status_code == 200
     assert producer.calls == 2
