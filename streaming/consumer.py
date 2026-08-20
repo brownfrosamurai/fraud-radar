@@ -51,9 +51,14 @@ class HttpNotifier:
         import httpx
 
         try:
+            payload = []
+            for row in rows:
+                item = row.model_dump(mode="json")
+                item["scoring_ms"] = row.scoring_ms
+                payload.append(item)
             response = httpx.post(
                 self._url,
-                json=[row.model_dump(mode="json") for row in rows],
+                json=payload,
                 headers={"X-Internal-Secret": self._secret} if self._secret else None,
                 timeout=2.0,
             )

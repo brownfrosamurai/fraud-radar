@@ -103,13 +103,15 @@ def test_http_notifier_sends_secret_and_checks_response(
     monkeypatch.setattr(httpx, "post", fake_post)
     caplog.set_level(logging.ERROR)
 
-    HttpNotifier(
-        "http://api/internal/scored", secret="test-secret"
-    ).notify([score_request(_req(), ConstScorer(0.12), datetime.now(timezone.utc))])
+    row = score_request(_req(), ConstScorer(0.12), datetime.now(timezone.utc))
+    HttpNotifier("http://api/internal/scored", secret="test-secret").notify([row])
 
     assert called["headers"] == {"X-Internal-Secret": "test-secret"}
     assert called["checked"] is True
     assert "commit notify failed" in caplog.text
+    payload = called["json"][0]
+    assert payload["scoring_ms"] == row.scoring_ms
+    assert row.scoring_ms is not None
 
 
 def test_batch_flushes_at_10_rows() -> None:

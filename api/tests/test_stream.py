@@ -37,6 +37,7 @@ def test_internal_scored_persists_and_broadcasts() -> None:
         hub=hub,
     )
     payload = _scored()
+    payload["scoring_ms"] = 42
     with TestClient(app) as client:
         with client.websocket_connect("/stream") as ws:
             res = client.post("/internal/scored", json=[payload])
@@ -44,7 +45,10 @@ def test_internal_scored_persists_and_broadcasts() -> None:
             msg = ws.receive_json()
             assert msg["id"] == payload["id"]
             assert msg["decision"] == "ALLOW"
-    assert store.get(UUID(payload["id"])) is not None
+            assert "scoring_ms" not in msg
+    stored = store.get(UUID(payload["id"]))
+    assert stored is not None
+    assert stored.scoring_ms == 42
 
 
 def test_internal_scored_requires_configured_secret(monkeypatch) -> None:
