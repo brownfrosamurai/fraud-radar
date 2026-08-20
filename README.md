@@ -12,7 +12,7 @@ Open http://localhost:3000
 
 ## Models
 
-Isolation Forest is the default on `POST /score`. Optional `?model=autoencoder` (501 if weights are not in the image).
+Isolation Forest is the default on `POST /score`. Optional `?model=autoencoder` (501 in Docker: the image has weights but not torch).
 
 Holdout evaluation (test split only, never accuracy):
 
@@ -29,7 +29,7 @@ Retrain (needs Kaggle credentials): `python -m ml.download_data && python -m ml.
 
 ```bash
 python3.12 -m venv .venv && source .venv/bin/activate
-pip install -e ".[dev]"
+pip install -e ".[dev,ml]"
 uvicorn api.main:app --reload
 ```
 
