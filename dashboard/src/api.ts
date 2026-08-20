@@ -45,3 +45,17 @@ export async function triggerBurst(): Promise<{ status: number; body: BurstRespo
   const body = (await res.json()) as BurstResponse;
   return { status: res.status, body };
 }
+
+export type Stats = {
+  processed: number;
+  throughput_tx_per_s: number;
+  latency_p50_ms: number | null;
+  latency_p95_ms: number | null;
+  flagged: number;
+};
+
+export async function fetchStats(): Promise<{ status: number; body: Stats | null }> {
+  const res = await fetch("/api/stats");
+  if (res.status !== 200) return { status: res.status, body: null };
+  return { status: 200, body: (await res.json()) as Stats };
+}

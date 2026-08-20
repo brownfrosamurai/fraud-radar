@@ -1,7 +1,7 @@
 import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
-import { ScoreCard } from "./ScoreCard";
+import { Workspace } from "./Workspace";
 
 const scored = {
   id: "11111111-1111-1111-1111-111111111111",
@@ -10,6 +10,14 @@ const scored = {
   model_score: 0.12,
   decision: "ALLOW",
   model_name: "isolation_forest",
+};
+
+const blocked = {
+  ...scored,
+  id: "b-1",
+  amount: 900,
+  decision: "BLOCK" as const,
+  model_score: 0.95,
 };
 
 class FakeWebSocket {
@@ -78,6 +86,24 @@ beforeEach(() => {
           { status: explainStatus },
         );
       }
+      if (url.includes("/stats")) {
+        return new Response(
+          JSON.stringify({
+            processed: 12,
+            throughput_tx_per_s: 1.6,
+            latency_p50_ms: 4,
+            latency_p95_ms: 9,
+            flagged: 3,
+          }),
+          { status: 200 },
+        );
+      }
+      if (url.includes("/alerts")) {
+        return new Response(
+          JSON.stringify({ items: [], total: 0, offset: 0, limit: 10 }),
+          { status: 200 },
+        );
+      }
       if (url.includes("/transactions")) {
         const rows = recentRowsPromise ? await recentRowsPromise : recentRows;
         return new Response(JSON.stringify(rows), { status: 200 });
@@ -114,23 +140,23 @@ afterEach(() => {
 });
 
 test("does not POST /score on mount", async () => {
-  render(<ScoreCard />);
+  render(<Workspace />);
   expect(await screen.findByText("Waiting for transactions…")).toBeInTheDocument();
   const fetchMock = vi.mocked(fetch);
   expect(fetchMock.mock.calls.some(([input]) => String(input).endsWith("/score"))).toBe(false);
 });
 
 test("renders a live row from the websocket", async () => {
-  render(<ScoreCard />);
+  render(<Workspace />);
   await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
   act(() => FakeWebSocket.instances[0].emit(scored));
   expect(await screen.findByText("ALLOW")).toBeInTheDocument();
-  expect(await screen.findByText("Amount")).toBeInTheDocument();
+  expect(screen.queryByText("Amount")).not.toBeInTheDocument();
 });
 
 test("burst button disables for cooldown_seconds", async () => {
   const user = userEvent.setup();
-  render(<ScoreCard />);
+  render(<Workspace />);
   await user.click(screen.getByRole("button", { name: /inject synthetic burst/i }));
   expect(await screen.findByRole("button", { name: /cooldown 30s/i })).toBeDisabled();
 });
@@ -138,14 +164,14 @@ test("burst button disables for cooldown_seconds", async () => {
 test("burst 503 shows retryable error without cooldown", async () => {
   const user = userEvent.setup();
   burstStatus = 503;
-  render(<ScoreCard />);
+  render(<Workspace />);
   await user.click(screen.getByRole("button", { name: /inject synthetic burst/i }));
   expect(await screen.findByText(/producer/i)).toBeInTheDocument();
   expect(screen.getByRole("button", { name: /inject synthetic burst/i })).toBeEnabled();
 });
 
 test("shows Reconnecting… after socket close", async () => {
-  render(<ScoreCard />);
+  render(<Workspace />);
   await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
   act(() => FakeWebSocket.instances[0].close());
   expect(screen.getByText("Reconnecting…")).toBeInTheDocument();
@@ -153,7 +179,7 @@ test("shows Reconnecting… after socket close", async () => {
 
 test("reconnect hydration keeps the newest 50 across socket and HTTP rows", async () => {
   vi.useFakeTimers();
-  const { unmount } = render(<ScoreCard />);
+  const { unmount } = render(<Workspace />);
   await act(async () => {});
 
   const oldRows = Array.from({ length: 50 }, (_, index) => ({
@@ -194,16 +220,14 @@ test("reconnect hydration keeps the newest 50 across socket and HTTP rows", asyn
   expect(screen.getByText("$2000.00")).toBeInTheDocument();
   expect(screen.getByText("$1000.00")).toBeInTheDocument();
   expect(screen.queryByText("$1.00")).not.toBeInTheDocument();
-  expect(
-    screen.getAllByRole("button").filter((button) => button.textContent?.startsWith("$")),
-  ).toHaveLength(50);
+  expect(screen.getAllByTestId("feed-row")).toHaveLength(50);
   unmount();
   vi.useRealTimers();
 });
 
 test("error then delayed close does not create overlapping sockets", async () => {
   vi.useFakeTimers();
-  const { unmount } = render(<ScoreCard />);
+  const { unmount } = render(<Workspace />);
   await act(async () => {});
   const first = FakeWebSocket.instances[0];
 
@@ -227,9 +251,9 @@ test("shows explain skeleton while the request is in flight", async () => {
   explainGate = new Promise((resolve) => {
     release = resolve;
   });
-  render(<ScoreCard />);
+  render(<Workspace />);
   await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
-  act(() => FakeWebSocket.instances[0].emit(scored));
+  act(() => FakeWebSocket.instances[0].emit(blocked));
   expect(await screen.findByTestId("explain-skeleton")).toBeInTheDocument();
   act(() => release());
   expect(await screen.findAllByTestId("explain-bar")).not.toHaveLength(0);
@@ -238,26 +262,25 @@ test("shows explain skeleton while the request is in flight", async () => {
 
 test("does not apply a stale explanation to a newer selection", async () => {
   const second = {
-    ...scored,
+    ...blocked,
     id: "22222222-2222-2222-2222-222222222222",
-    amount: 900,
-    decision: "BLOCK" as const,
+    amount: 800,
   };
   let releaseFirst!: () => void;
   explainGate = new Promise((resolve) => {
     releaseFirst = resolve;
   });
   const user = userEvent.setup();
-  render(<ScoreCard />);
+  render(<Workspace />);
   await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
   act(() => {
-    FakeWebSocket.instances[0].emit(scored);
+    FakeWebSocket.instances[0].emit(blocked);
     FakeWebSocket.instances[0].emit(second);
   });
   await screen.findByTestId("explain-skeleton");
   explainItems = [{ feature: "V14", contribution: 0.9 }];
   explainGate = null;
-  await user.click(screen.getByText("$900.00"));
+  await user.click(screen.getByText("$800.00"));
   act(() => releaseFirst());
   expect(await screen.findByText("V14")).toBeInTheDocument();
   expect(screen.queryByText("Amount")).not.toBeInTheDocument();
@@ -265,8 +288,23 @@ test("does not apply a stale explanation to a newer selection", async () => {
 
 test("501 shows autoencoder isn’t loaded", async () => {
   explainStatus = 501;
-  render(<ScoreCard />);
+  render(<Workspace />);
+  await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
+  act(() => FakeWebSocket.instances[0].emit(blocked));
+  expect(await screen.findByText("Autoencoder isn’t loaded")).toBeInTheDocument();
+});
+
+test("stats rail renders processed and latency", async () => {
+  render(<Workspace />);
+  expect(await screen.findByTestId("stats-rail")).toBeInTheDocument();
+  expect(await screen.findByText("12")).toBeInTheDocument();
+  expect(screen.getByText(/4\s*\/\s*9/)).toBeInTheDocument();
+});
+
+test("ALLOW feed row is not a button", async () => {
+  render(<Workspace />);
   await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
   act(() => FakeWebSocket.instances[0].emit(scored));
-  expect(await screen.findByText("Autoencoder isn’t loaded")).toBeInTheDocument();
+  expect(await screen.findByTestId("feed-row")).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: /\$20\.00/i })).not.toBeInTheDocument();
 });
