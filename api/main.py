@@ -9,11 +9,11 @@ from api.burst import BURST_SIZE, BURST_WINDOW_MS, BurstController, CooldownActi
 from api.schemas import BurstResponse, ExplanationResponse, ScoreRequest, ScoredTransaction
 from api.scoring import decide, explain
 from api.serve import BundleScorer, Scorer, load_bundle
-from api.store import InMemoryStore
+from api.store import InMemoryStore, TransactionStore
 
 
 def create_app(
-    store: InMemoryStore | None = None,
+    store: TransactionStore | None = None,
     clock: Callable[[], datetime] | None = None,
     scorer: Scorer | None = None,
     burst_rows: list[ScoreRequest] | None = None,
