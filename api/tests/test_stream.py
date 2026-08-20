@@ -6,9 +6,9 @@ from fastapi.testclient import TestClient
 from api.hub import StreamHub
 from api.main import create_app
 from api.schemas import Features, ScoredTransaction
-from api.serve import ConstScorer
+from api.serve import BundleScorer, ConstScorer
 from api.store import InMemoryStore
-from api.tests.conftest import FakeProducer
+from api.tests.conftest import FakeProducer, tiny_if_bundle
 
 
 def _scored() -> dict:
@@ -78,10 +78,16 @@ def test_internal_scored_requires_configured_secret(monkeypatch) -> None:
 
 def test_explanation_readable_after_internal_scored() -> None:
     store = InMemoryStore()
-    app = create_app(store=store, scorer=ConstScorer(0.12), producer=FakeProducer())
+    app = create_app(
+        store=store,
+        scorer=BundleScorer(tiny_if_bundle()),
+        producer=FakeProducer(),
+    )
     payload = _scored()
     client = TestClient(app)
     client.post("/internal/scored", json=[payload])
     expl = client.get(f"/transactions/{payload['id']}/explanation")
     assert expl.status_code == 200
-    assert expl.json()["explanation"][0]["feature"] == "Amount"
+    items = expl.json()["explanation"]
+    assert len(items) == 5
+    assert all(item["contribution"] >= 0 for item in items)

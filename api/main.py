@@ -18,10 +18,11 @@ from api.burst import (
     ProducerUnavailable,
 )
 from api.db import create_engine_from_url
+from api.explain import explain
 from api.hub import StreamHub
 from api.postgres_store import PostgresStore
 from api.schemas import BurstResponse, ExplanationResponse, ScoreRequest, ScoredTransaction
-from api.scoring import decide, explain
+from api.scoring import decide
 from api.serve import BundleScorer, Scorer, load_bundle
 from api.store import InMemoryStore, TransactionStore
 
@@ -176,7 +177,16 @@ def create_app(
         row = app.state.store.get(transaction_id)
         if row is None:
             raise HTTPException(status_code=404, detail="transaction not found")
-        return ExplanationResponse(transaction_id=transaction_id, explanation=explain(row))
+        bundle = getattr(app.state.scorer, "bundle", None)
+        if bundle is None:
+            raise HTTPException(status_code=500, detail="explainer unavailable")
+        try:
+            items = explain(row, bundle)
+        except LookupError as exc:
+            raise HTTPException(status_code=501, detail=str(exc)) from exc
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail="explanation failed") from exc
+        return ExplanationResponse(transaction_id=transaction_id, explanation=items)
 
     return app
 
