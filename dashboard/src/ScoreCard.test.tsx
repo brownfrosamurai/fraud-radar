@@ -69,3 +69,47 @@ test("burst button disables for cooldown_seconds", async () => {
   await user.click(screen.getByRole("button", { name: /inject synthetic burst/i }));
   expect(await screen.findByRole("button", { name: /cooldown 30s/i })).toBeDisabled();
 });
+
+test("failed API is distinct from waiting for transactions", async () => {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async () => {
+      throw new Error("network");
+    }),
+  );
+  render(<ScoreCard />);
+  expect(await screen.findByText("API unavailable")).toBeInTheDocument();
+  expect(screen.queryByText("Waiting for transactions…")).not.toBeInTheDocument();
+});
+
+test("burst failure shows error and does not stick injecting", async () => {
+  const user = userEvent.setup();
+  const fetchMock = vi.mocked(fetch);
+  fetchMock.mockImplementation(async (input: RequestInfo, init?: RequestInit) => {
+    const url = String(input);
+    if (url.endsWith("/demo/burst") && init?.method === "POST") {
+      throw new Error("network");
+    }
+    if (url.endsWith("/score") && init?.method === "POST") {
+      return new Response(JSON.stringify(scored), { status: 200 });
+    }
+    if (url.includes("/explanation")) {
+      return new Response(
+        JSON.stringify({
+          transaction_id: scored.id,
+          explanation: [{ feature: "Amount", contribution: 0.42 }],
+        }),
+        { status: 200 },
+      );
+    }
+    if (url.includes("/transactions")) {
+      return new Response(JSON.stringify([scored]), { status: 200 });
+    }
+    return new Response("not found", { status: 404 });
+  });
+  render(<ScoreCard />);
+  await screen.findByText("ALLOW");
+  await user.click(screen.getByRole("button", { name: /inject synthetic burst/i }));
+  expect(await screen.findByText("Burst failed")).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: /inject synthetic burst/i })).toBeEnabled();
+});

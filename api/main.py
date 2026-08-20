@@ -6,7 +6,7 @@ from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import JSONResponse
 
 from api.burst import BURST_SIZE, BURST_WINDOW_MS, BurstController, CooldownActive
-from api.schemas import ExplanationResponse, ScoreRequest, ScoredTransaction
+from api.schemas import BurstResponse, ExplanationResponse, ScoreRequest, ScoredTransaction
 from api.scoring import decide, explain, score
 from api.store import InMemoryStore
 
@@ -24,8 +24,15 @@ def create_app(
     def health() -> dict[str, str]:
         return {"status": "ok"}
 
-    @app.post("/demo/burst")
-    def post_burst():
+    @app.post(
+        "/demo/burst",
+        response_model=BurstResponse,
+        responses={
+            200: {"model": BurstResponse},
+            429: {"model": BurstResponse},
+        },
+    )
+    def post_burst() -> BurstResponse | JSONResponse:
         try:
             return app.state.burst.trigger()
         except CooldownActive as exc:

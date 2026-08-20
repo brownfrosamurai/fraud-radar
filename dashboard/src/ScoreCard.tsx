@@ -20,23 +20,35 @@ export function ScoreCard() {
   const [explanation, setExplanation] = useState<FeatureContribution[]>([]);
   const [cooldown, setCooldown] = useState(0);
   const [injecting, setInjecting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
-    (async () => {
-      const scored = await postScore(20);
-      const latest = (await fetchLatest()) ?? scored;
-      const expl = await fetchExplanation(latest.id);
-      if (!cancelled) {
-        setTx(latest);
-        setExplanation(expl);
+    async function load() {
+      try {
+        const scored = await postScore(20);
+        const latest = (await fetchLatest()) ?? scored;
+        const expl = await fetchExplanation(latest.id);
+        if (!cancelled) {
+          setTx(latest);
+          setExplanation(expl);
+          setError(null);
+        }
+      } catch {
+        if (!cancelled) setError("API unavailable");
       }
-    })();
+    }
+    void load();
     const poll = window.setInterval(async () => {
-      const latest = await fetchLatest();
-      if (!cancelled && latest) {
-        setTx(latest);
-        setExplanation(await fetchExplanation(latest.id));
+      try {
+        const latest = await fetchLatest();
+        if (!cancelled && latest) {
+          setTx(latest);
+          setExplanation(await fetchExplanation(latest.id));
+          setError(null);
+        }
+      } catch {
+        if (!cancelled) setError("API unavailable");
       }
     }, 1000);
     return () => {
@@ -53,13 +65,24 @@ export function ScoreCard() {
 
   async function onBurst() {
     setInjecting(true);
-    const { status, body } = await triggerBurst();
-    setInjecting(false);
-    if (status === 200 && body.accepted) {
-      setCooldown(body.cooldown_seconds);
-      return;
+    try {
+      const { status, body } = await triggerBurst();
+      if (status === 200 && body.accepted) {
+        setCooldown(body.cooldown_seconds);
+        setError(null);
+        return;
+      }
+      if (status === 429) {
+        setCooldown(body.cooldown_seconds);
+        setError(null);
+        return;
+      }
+      setError("Burst failed");
+    } catch {
+      setError("Burst failed");
+    } finally {
+      setInjecting(false);
     }
-    if (status === 429) setCooldown(body.cooldown_seconds);
   }
 
   const disabled = injecting || cooldown > 0;
@@ -87,9 +110,12 @@ export function ScoreCard() {
             ))}
           </ul>
         </>
+      ) : error ? (
+        <p className="mt-4 text-neutral-400">{error}</p>
       ) : (
         <p className="mt-4 text-neutral-400">Waiting for transactions…</p>
       )}
+      {tx && error ? <p className="mt-2 text-sm text-neutral-400">{error}</p> : null}
       <button
         type="button"
         className="mt-6 bg-cyan-400 px-3 py-2 text-sm font-semibold text-black disabled:opacity-50"

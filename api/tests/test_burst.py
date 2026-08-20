@@ -40,3 +40,17 @@ def test_burst_accepted_after_cooldown(client, clock) -> None:
     assert res.json()["accepted"] is True
     rows = client.get("/transactions", params={"limit": 50}).json()
     assert len(rows) == 50
+
+
+def _schema_ref(response: dict) -> str:
+    schema = response["content"]["application/json"]["schema"]
+    return schema.get("$ref", schema.get("anyOf", [{}])[0].get("$ref", ""))
+
+
+def test_burst_openapi_documents_200_and_429(client) -> None:
+    spec = client.get("/openapi.json").json()
+    responses = spec["paths"]["/demo/burst"]["post"]["responses"]
+    assert "BurstResponse" in _schema_ref(responses["200"])
+    assert "BurstResponse" in _schema_ref(responses["429"])
+    assert "BurstResponse" in spec["components"]["schemas"]
+
