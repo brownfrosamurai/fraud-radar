@@ -8,9 +8,9 @@ Real-time fraud scoring demo (Slice 0 walking skeleton).
 docker compose up --build
 ```
 
-Open http://localhost:3000 — one card polls the score API, shows ALLOW/REVIEW/BLOCK, and the burst button injects 50 high-risk rows with a 30s cooldown.
+Open <http://localhost:3000> — one card polls the score API, shows ALLOW/REVIEW/BLOCK, and the burst button injects 50 high-risk rows with a 30s cooldown.
 
-API: http://localhost:8000/health · OpenAPI: http://localhost:8000/docs
+API: <http://localhost:8000/health> · OpenAPI: <http://localhost:8000/docs>
 
 ## Dev without Docker
 
