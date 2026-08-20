@@ -21,6 +21,7 @@ def main(csv_path: Path = DEFAULT_CSV) -> int:
 
     from ml.evaluate import evaluate_model, save_pr_curve
     from ml.export_burst import select_burst_rows, write_burst_payload
+    from ml.export_replay import select_replay_rows, write_replay_payload
     from ml.features import dataframe_to_array
     from ml.split import time_ordered_split
     from ml.train_autoencoder import fit_autoencoder, raw_ae_score
@@ -49,6 +50,9 @@ def main(csv_path: Path = DEFAULT_CSV) -> int:
     joblib.dump(ae_cdf, ARTIFACTS_DIR / "ae_cdf.joblib")
 
     write_burst_payload(select_burst_rows(test_df), ARTIFACTS_DIR / "burst_payload.json")
+    write_replay_payload(
+        select_replay_rows(test_df), ARTIFACTS_DIR / "replay_payload.json"
+    )
 
     X_test = scaler.transform(dataframe_to_array(test_df))
     y_true = test_df["Class"].to_numpy()

@@ -1,25 +1,49 @@
+import asyncio
+import os
 from collections.abc import Callable
+from contextlib import suppress
 from datetime import datetime, timezone
 from uuid import UUID
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, Header, HTTPException, Query, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse
 
-from api.burst import BURST_SIZE, BURST_WINDOW_MS, BurstController, CooldownActive
+from api.burst import (
+    BURST_SIZE,
+    BURST_WINDOW_MS,
+    BurstController,
+    CooldownActive,
+    HttpProducerClient,
+    ProducerClient,
+    ProducerUnavailable,
+)
+from api.db import create_engine_from_url
+from api.hub import StreamHub
+from api.postgres_store import PostgresStore
 from api.schemas import BurstResponse, ExplanationResponse, ScoreRequest, ScoredTransaction
 from api.scoring import decide, explain
 from api.serve import BundleScorer, Scorer, load_bundle
-from api.store import InMemoryStore
+from api.store import InMemoryStore, TransactionStore
 
 
 def create_app(
-    store: InMemoryStore | None = None,
+    store: TransactionStore | None = None,
     clock: Callable[[], datetime] | None = None,
     scorer: Scorer | None = None,
-    burst_rows: list[ScoreRequest] | None = None,
+    producer: ProducerClient | None = None,
+    hub: StreamHub | None = None,
+    database_url: str | None = None,
 ) -> FastAPI:
     app = FastAPI(title="Fraud Radar")
-    app.state.store = store or InMemoryStore()
+    url = database_url if database_url is not None else os.environ.get("DATABASE_URL")
+    app.state.store = store or (
+        PostgresStore(create_engine_from_url(url)) if url else InMemoryStore()
+    )
+    app.state.hub = hub or StreamHub()
+    app.state.internal_secret = os.environ.get("INTERNAL_API_SECRET")
+    app.state.producer = producer or HttpProducerClient(
+        os.environ.get("PRODUCER_URL", "http://producer:8001")
+    )
     time_fn = clock or (lambda: datetime.now(timezone.utc))
     if scorer is None:
         scorer = BundleScorer(load_bundle())
@@ -28,17 +52,11 @@ def create_app(
     def resolve_scorer() -> Scorer:
         if app.state.scorer is None:
             app.state.scorer = BundleScorer(load_bundle())
-        burst = getattr(app.state, "burst", None)
-        if burst is not None:
-            burst.bind_scorer(app.state.scorer)
         return app.state.scorer
 
     app.state.burst = BurstController(
-        store=app.state.store,
         clock=time_fn,
-        scorer=app.state.scorer,
-        burst_rows=burst_rows,
-        resolve_scorer=resolve_scorer,
+        producer=app.state.producer,
     )
 
     @app.get("/health")
@@ -51,6 +69,7 @@ def create_app(
         responses={
             200: {"model": BurstResponse},
             429: {"model": BurstResponse},
+            503: {"model": BurstResponse},
         },
     )
     def post_burst() -> BurstResponse | JSONResponse:
@@ -66,6 +85,62 @@ def create_app(
                     "cooldown_seconds": exc.remaining,
                 },
             )
+        except ProducerUnavailable:
+            return JSONResponse(
+                status_code=503,
+                content={
+                    "accepted": False,
+                    "size": BURST_SIZE,
+                    "window_ms": BURST_WINDOW_MS,
+                    "cooldown_seconds": 0,
+                },
+            )
+
+    @app.post("/internal/scored")
+    def post_internal_scored(
+        rows: list[ScoredTransaction],
+        x_internal_secret: str | None = Header(default=None),
+    ) -> dict:
+        if (
+            app.state.internal_secret
+            and x_internal_secret != app.state.internal_secret
+        ):
+            raise HTTPException(status_code=401, detail="invalid internal secret")
+        app.state.store.put_many(rows)
+        for row in rows:
+            app.state.hub.broadcast(row)
+        return {"ok": True, "n": len(rows)}
+
+    @app.websocket("/stream")
+    async def stream(ws: WebSocket) -> None:
+        await ws.accept()
+        q = app.state.hub.subscribe()
+        receive_task = asyncio.create_task(ws.receive())
+        item_task = asyncio.create_task(asyncio.to_thread(q.get))
+        try:
+            while True:
+                done, _ = await asyncio.wait(
+                    {receive_task, item_task},
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+                if receive_task in done:
+                    message = receive_task.result()
+                    if message["type"] == "websocket.disconnect":
+                        break
+                    receive_task = asyncio.create_task(ws.receive())
+                if item_task in done:
+                    await ws.send_json(item_task.result())
+                    item_task = asyncio.create_task(asyncio.to_thread(q.get))
+        except WebSocketDisconnect:
+            pass
+        finally:
+            receive_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await receive_task
+            if not item_task.done():
+                q.put(None)
+                await item_task
+            app.state.hub.unsubscribe(q)
 
     @app.post("/score", response_model=ScoredTransaction)
     def post_score(

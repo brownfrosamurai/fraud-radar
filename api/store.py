@@ -1,9 +1,18 @@
 import threading
+from typing import Protocol
 from uuid import UUID
 
 from api.schemas import ScoredTransaction
 
 MAX_ROWS = 500
+LIST_CAP = 50
+
+
+class TransactionStore(Protocol):
+    def put(self, row: ScoredTransaction) -> None: ...
+    def put_many(self, rows: list[ScoredTransaction]) -> None: ...
+    def get(self, id: UUID) -> ScoredTransaction | None: ...
+    def list_recent(self, limit: int = 50) -> list[ScoredTransaction]: ...
 
 
 class InMemoryStore:
@@ -22,11 +31,15 @@ class InMemoryStore:
                 oldest = self._order.pop(0)
                 del self._rows[oldest]
 
+    def put_many(self, rows: list[ScoredTransaction]) -> None:
+        for row in rows:
+            self.put(row)
+
     def get(self, id: UUID) -> ScoredTransaction | None:
         with self._lock:
             return self._rows.get(id)
 
     def list_recent(self, limit: int = 50) -> list[ScoredTransaction]:
         with self._lock:
-            ids = list(reversed(self._order))[: min(limit, 50)]
+            ids = list(reversed(self._order))[: min(limit, LIST_CAP)]
             return [self._rows[i] for i in ids]
