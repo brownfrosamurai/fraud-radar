@@ -1,6 +1,6 @@
 from uuid import UUID
 
-from sqlalchemy import select, text
+from sqlalchemy import select
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session
 
@@ -26,7 +26,7 @@ def _from_orm(row: ScoredTransactionRow) -> ScoredTransaction:
     return ScoredTransaction(
         id=row.id,
         occurred_at=row.occurred_at,
-        amount=row.amount,
+        amount=float(row.amount),
         model_score=row.model_score,
         decision=row.decision,  # type: ignore[arg-type]
         model_name=row.model_name,  # type: ignore[arg-type]
@@ -57,8 +57,9 @@ class PostgresStore:
     def list_recent(self, limit: int = 50) -> list[ScoredTransaction]:
         cap = min(limit, LIST_CAP)
         with Session(self._engine) as session:
-            order = [ScoredTransactionRow.created_at.desc()]
-            if self._engine.dialect.name == "sqlite":
-                order.append(text("rowid DESC"))
-            stmt = select(ScoredTransactionRow).order_by(*order).limit(cap)
+            stmt = (
+                select(ScoredTransactionRow)
+                .order_by(ScoredTransactionRow.created_at.desc())
+                .limit(cap)
+            )
             return [_from_orm(row) for row in session.scalars(stmt)]

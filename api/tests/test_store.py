@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
 from sqlalchemy import create_engine
@@ -72,7 +72,12 @@ def test_postgres_store_put_many_and_list_cap_50() -> None:
     engine = create_engine("sqlite:///:memory:")
     create_tables(engine)
     store = PostgresStore(engine)
-    rows = [_row() for _ in range(51)]
+    base = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    rows = []
+    for i in range(51):
+        row = _row()
+        row = row.model_copy(update={"created_at": base + timedelta(seconds=i)})
+        rows.append(row)
     store.put_many(rows)
     recent = store.list_recent(limit=50)
     assert len(recent) == 50
