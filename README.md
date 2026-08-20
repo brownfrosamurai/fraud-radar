@@ -14,6 +14,8 @@ Open http://localhost:3000. The live feed should move within 10 seconds with no 
 
 Isolation Forest is the stream scorer and the default on `POST /score`. Optional `?model=autoencoder` remains 501 in Docker: the image has weights but not torch.
 
+Click a live-feed row for Isolation Forest permutation-importance bars (top 5 features). `?model=autoencoder` explain is 501 in Docker (no torch in the API image).
+
 Holdout evaluation (test split only, never accuracy):
 
 | Model | PR-AUC | Precision@0.9 | Recall@0.9 | F1@0.9 |

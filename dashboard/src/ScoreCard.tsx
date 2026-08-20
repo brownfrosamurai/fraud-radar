@@ -41,7 +41,33 @@ export function ScoreCard() {
   const [injecting, setInjecting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [reconnecting, setReconnecting] = useState(false);
+  const [explaining, setExplaining] = useState(false);
   const selectedId = useRef<string | null>(null);
+
+  async function loadExplanation(row: ScoredTransaction) {
+    selectedId.current = row.id;
+    setSelected(row);
+    setExplanation([]);
+    setExplaining(true);
+    try {
+      const result = await fetchExplanation(row.id);
+      if (selectedId.current !== row.id) return;
+      if (result.status === 200) {
+        setExplanation(result.items);
+        setError(null);
+      } else if (result.status === 501) {
+        setExplanation([]);
+        setError("Autoencoder isn’t loaded");
+      } else {
+        setExplanation([]);
+        setError("Explanation unavailable");
+      }
+    } catch {
+      if (selectedId.current === row.id) setError("Explanation unavailable");
+    } finally {
+      if (selectedId.current === row.id) setExplaining(false);
+    }
+  }
 
   useEffect(() => {
     let cancelled = false;
@@ -51,17 +77,7 @@ export function ScoreCard() {
     let generation = 0;
 
     async function selectTransaction(row: ScoredTransaction) {
-      selectedId.current = row.id;
-      setSelected(row);
-      try {
-        const result = await fetchExplanation(row.id);
-        if (!cancelled && selectedId.current === row.id) {
-          setExplanation(result);
-          setError(null);
-        }
-      } catch {
-        if (!cancelled && selectedId.current === row.id) setError("API unavailable");
-      }
+      void loadExplanation(row);
     }
 
     function scheduleReconnect(
@@ -148,18 +164,7 @@ export function ScoreCard() {
   }, []);
 
   async function onSelect(row: ScoredTransaction) {
-    selectedId.current = row.id;
-    setSelected(row);
-    setExplanation([]);
-    try {
-      const result = await fetchExplanation(row.id);
-      if (selectedId.current === row.id) {
-        setExplanation(result);
-        setError(null);
-      }
-    } catch {
-      if (selectedId.current === row.id) setError("API unavailable");
-    }
+    await loadExplanation(row);
   }
 
   useEffect(() => {
@@ -203,7 +208,7 @@ export function ScoreCard() {
 
   return (
     <section className="mx-auto mt-16 w-[480px] border border-neutral-700 p-6">
-      <p className="text-xs uppercase tracking-wide text-neutral-400">Fraud Radar · Slice 2</p>
+      <p className="text-xs uppercase tracking-wide text-neutral-400">Fraud Radar · Slice 3</p>
       {reconnecting ? <p className="mt-2 text-sm text-neutral-400">Reconnecting…</p> : null}
       {rows.length > 0 ? (
         <ul className="mt-4 space-y-2">
@@ -230,13 +235,35 @@ export function ScoreCard() {
           <p className="font-mono text-sm text-neutral-400">
             score {selected.model_score.toFixed(2)}
           </p>
-          <ul className="mt-2 space-y-1 font-mono text-sm">
-            {explanation.map((item) => (
-              <li key={item.feature}>
-                <span>{item.feature}</span> {item.contribution.toFixed(2)}
-              </li>
-            ))}
-          </ul>
+          {explaining ? (
+            <div className="mt-2 space-y-1" data-testid="explain-skeleton">
+              {Array.from({ length: 5 }, (_, index) => (
+                <div key={index} className="h-4 animate-pulse bg-neutral-800" />
+              ))}
+            </div>
+          ) : (
+            <ul className="mt-2 space-y-1 font-mono text-sm">
+              {explanation.map((item) => {
+                const max = Math.max(...explanation.map((row) => row.contribution), 1e-9);
+                const width = `${Math.round((item.contribution / max) * 100)}%`;
+                return (
+                  <li key={item.feature}>
+                    <div className="flex justify-between">
+                      <span>{item.feature}</span>
+                      <span>{item.contribution.toFixed(2)}</span>
+                    </div>
+                    <div className="mt-1 h-1 bg-neutral-800">
+                      <div
+                        data-testid="explain-bar"
+                        className="h-1 bg-cyan-400"
+                        style={{ width }}
+                      />
+                    </div>
+                  </li>
+                );
+              })}
+            </ul>
+          )}
         </div>
       ) : null}
       {error ? <p className="mt-2 text-sm text-neutral-400">{error}</p> : null}

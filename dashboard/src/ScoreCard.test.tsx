@@ -42,12 +42,24 @@ class FakeWebSocket {
 let burstStatus = 200;
 let recentRows: typeof scored[] = [];
 let recentRowsPromise: Promise<typeof scored[]> | null = null;
+let explainStatus = 200;
+let explainItems = [
+  { feature: "Amount", contribution: 0.42 },
+  { feature: "V14", contribution: 0.21 },
+];
+let explainGate: Promise<void> | null = null;
 
 beforeEach(() => {
   FakeWebSocket.instances = [];
   burstStatus = 200;
   recentRows = [];
   recentRowsPromise = null;
+  explainStatus = 200;
+  explainItems = [
+    { feature: "Amount", contribution: 0.42 },
+    { feature: "V14", contribution: 0.21 },
+  ];
+  explainGate = null;
   vi.stubGlobal("WebSocket", FakeWebSocket);
   vi.stubGlobal(
     "fetch",
@@ -57,15 +69,13 @@ beforeEach(() => {
         throw new Error("POST /score must not be called");
       }
       if (url.includes("/explanation")) {
+        if (explainGate) await explainGate;
         return new Response(
           JSON.stringify({
             transaction_id: scored.id,
-            explanation: [
-              { feature: "Amount", contribution: 0.42 },
-              { feature: "V14", contribution: 0.21 },
-            ],
+            explanation: explainItems,
           }),
-          { status: 200 },
+          { status: explainStatus },
         );
       }
       if (url.includes("/transactions")) {
@@ -210,4 +220,53 @@ test("error then delayed close does not create overlapping sockets", async () =>
   expect(FakeWebSocket.instances).toHaveLength(2);
   unmount();
   vi.useRealTimers();
+});
+
+test("shows explain skeleton while the request is in flight", async () => {
+  let release!: () => void;
+  explainGate = new Promise((resolve) => {
+    release = resolve;
+  });
+  render(<ScoreCard />);
+  await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
+  act(() => FakeWebSocket.instances[0].emit(scored));
+  expect(await screen.findByTestId("explain-skeleton")).toBeInTheDocument();
+  act(() => release());
+  expect(await screen.findAllByTestId("explain-bar")).not.toHaveLength(0);
+  expect(screen.queryByTestId("explain-skeleton")).not.toBeInTheDocument();
+});
+
+test("does not apply a stale explanation to a newer selection", async () => {
+  const second = {
+    ...scored,
+    id: "22222222-2222-2222-2222-222222222222",
+    amount: 900,
+    decision: "BLOCK" as const,
+  };
+  let releaseFirst!: () => void;
+  explainGate = new Promise((resolve) => {
+    releaseFirst = resolve;
+  });
+  const user = userEvent.setup();
+  render(<ScoreCard />);
+  await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
+  act(() => {
+    FakeWebSocket.instances[0].emit(scored);
+    FakeWebSocket.instances[0].emit(second);
+  });
+  await screen.findByTestId("explain-skeleton");
+  explainItems = [{ feature: "V14", contribution: 0.9 }];
+  explainGate = null;
+  await user.click(screen.getByText("$900.00"));
+  act(() => releaseFirst());
+  expect(await screen.findByText("V14")).toBeInTheDocument();
+  expect(screen.queryByText("Amount")).not.toBeInTheDocument();
+});
+
+test("501 shows autoencoder isn’t loaded", async () => {
+  explainStatus = 501;
+  render(<ScoreCard />);
+  await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
+  act(() => FakeWebSocket.instances[0].emit(scored));
+  expect(await screen.findByText("Autoencoder isn’t loaded")).toBeInTheDocument();
 });
