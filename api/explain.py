@@ -39,6 +39,10 @@ def _anomaly(model: IsolationForest, X: np.ndarray) -> np.ndarray:
     return -model.score_samples(X)
 
 
+# Not sklearn's permutation_importance: that shuffles a column across a whole X and
+# measures the drop in a dataset-level metric. This is instance-level — it swaps this one
+# transaction's each feature for sampled background rows and measures the drop in *its*
+# anomaly score, to answer "why did this transaction score the way it did."
 def permutation_top5(
     bundle: ModelBundle,
     row: ScoredTransaction,
