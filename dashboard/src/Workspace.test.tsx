@@ -108,8 +108,13 @@ beforeEach(() => {
       }
       if (url.includes("/alerts")) {
         lastAlertsUrl = url;
+        const offset = Number(new URL(url, "http://local.test").searchParams.get("offset") || "0");
+        const items =
+          offset === 0
+            ? alertItems
+            : alertItems.map((row, index) => ({ ...row, id: `${row.id}-p${offset}-${index}` }));
         return new Response(
-          JSON.stringify({ items: alertItems, total: alertTotal, offset: 0, limit: 10 }),
+          JSON.stringify({ items, total: alertTotal, offset, limit: 10 }),
           { status: 200 },
         );
       }
@@ -257,6 +262,17 @@ test("error then delayed close does not create overlapping sockets", async () =>
   vi.useRealTimers();
 });
 
+test("explain panel shows mockup chrome and a permutation tooltip", async () => {
+  render(<Workspace />);
+  await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
+  act(() => FakeWebSocket.instances[0].emit(blocked));
+  expect(await screen.findByRole("button", { name: /what explainability shows/i })).toBeInTheDocument();
+  expect(screen.getByRole("tooltip")).toHaveTextContent(/permutation importance/i);
+  expect(await screen.findByText(/feature contribution to risk score/i)).toBeInTheDocument();
+  expect(screen.getAllByTestId("explain-bar")[0]).toHaveClass("pos");
+  expect(screen.getByText("+0.420")).toBeInTheDocument();
+});
+
 test("shows explain skeleton while the request is in flight", async () => {
   let release!: () => void;
   explainGate = new Promise((resolve) => {
@@ -291,7 +307,7 @@ test("does not apply a stale explanation to a newer selection", async () => {
   await screen.findByTestId("explain-skeleton");
   explainItems = [{ feature: "V14", contribution: 0.9 }];
   explainGate = null;
-  await user.click(screen.getByText("$800.00"));
+  await user.click(screen.getByRole("button", { name: /\$800\.00/i }));
   act(() => releaseFirst());
   expect(await screen.findByText("V14")).toBeInTheDocument();
   expect(within(screen.getByTestId("explain-body")).queryByText("Amount")).not.toBeInTheDocument();
@@ -317,6 +333,7 @@ test("ALLOW feed row is not a button", async () => {
   await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
   act(() => FakeWebSocket.instances[0].emit(scored));
   expect(await screen.findByTestId("feed-row")).toBeInTheDocument();
+  expect(screen.getByTestId("feed-row")).toHaveClass("feed-row");
   expect(screen.queryByRole("button", { name: /\$20\.00/i })).not.toBeInTheDocument();
 });
 
@@ -344,8 +361,18 @@ test("load more increases offset", async () => {
   alertItems = [{ ...scored, decision: "REVIEW", amount: 80, model_score: 0.5 }];
   alertTotal = 25;
   render(<Workspace />);
+  expect(await screen.findByTestId("alerts-shown")).toHaveTextContent("Showing 1 of 25");
   await user.click(await screen.findByRole("button", { name: /load more/i }));
   expect(lastAlertsUrl).toMatch(/offset=10/);
+});
+
+test("alerts footer keeps Load more on the right of the shown count", async () => {
+  alertItems = [{ ...scored, decision: "REVIEW", amount: 80, model_score: 0.5 }];
+  alertTotal = 25;
+  render(<Workspace />);
+  const shown = await screen.findByTestId("alerts-shown");
+  const loadMore = screen.getByRole("button", { name: /load more/i });
+  expect(shown.compareDocumentPosition(loadMore) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
 });
 
 test("clicking an alert row opens explanation", async () => {
@@ -355,6 +382,40 @@ test("clicking an alert row opens explanation", async () => {
   render(<Workspace />);
   await user.click(await screen.findByText("$777.00"));
   expect(await screen.findAllByTestId("explain-bar")).not.toHaveLength(0);
+});
+
+test("flagged websocket row prepends to alerts without refetching", async () => {
+  render(<Workspace />);
+  await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
+  await waitFor(() =>
+    expect(vi.mocked(fetch).mock.calls.some(([input]) => String(input).includes("/alerts"))).toBe(
+      true,
+    ),
+  );
+  const fetchesBefore = vi
+    .mocked(fetch)
+    .mock.calls.filter(([input]) => String(input).includes("/alerts")).length;
+  act(() => FakeWebSocket.instances[0].emit(blocked));
+  expect(await screen.findByTestId("alerts-shown")).toHaveTextContent("Showing 1 of 1");
+  expect(screen.getAllByText("$900.00").length).toBeGreaterThan(1);
+  expect(
+    vi.mocked(fetch).mock.calls.filter(([input]) => String(input).includes("/alerts")),
+  ).toHaveLength(fetchesBefore);
+});
+
+test("alerts table is capped at 50 like the live feed", async () => {
+  alertItems = Array.from({ length: 50 }, (_, index) => ({
+    ...scored,
+    id: `alert-cap-${index}`,
+    decision: "REVIEW" as const,
+    amount: 100 + index,
+    model_score: 0.5,
+  }));
+  alertTotal = 80;
+  render(<Workspace />);
+  expect(await screen.findByTestId("alerts-shown")).toHaveTextContent("Showing 50 of 80");
+  expect(screen.getByRole("button", { name: /load more/i })).toBeDisabled();
+  expect(screen.getAllByText(/capped at 50/i).length).toBeGreaterThanOrEqual(2);
 });
 
 test("alerts table shows Source IP from account chrome", async () => {

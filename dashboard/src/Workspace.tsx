@@ -19,6 +19,10 @@ type AlertFilter = "all" | "review" | "block";
 type AlertSort = "created_at" | "amount" | "model_score" | "decision";
 type AlertDir = "asc" | "desc";
 
+const LIVE_CAP = 50;
+const EXPLAIN_TIP =
+  "Permutation importance on Isolation Forest. Each bar is how much the score dropped when that feature was shuffled. Larger bars mattered more for this Review or Block. This is not SHAP.";
+
 const SORT_HEADERS: { key: AlertSort; label: string }[] = [
   { key: "created_at", label: "Time" },
   { key: "amount", label: "Amount" },
@@ -52,7 +56,7 @@ function mergeNewest(
   }
   return [...byId.values()]
     .sort((left, right) => Date.parse(right.occurred_at) - Date.parse(left.occurred_at))
-    .slice(0, 50);
+    .slice(0, LIVE_CAP);
 }
 
 function formatLatency(stats: Stats | null): string {
@@ -62,6 +66,26 @@ function formatLatency(stats: Stats | null): string {
 
 function formatTime(iso: string): string {
   return new Date(iso).toISOString().slice(11, 19);
+}
+
+function matchesAlertFilter(row: ScoredTransaction, filter: AlertFilter): boolean {
+  if (filter === "review") return row.decision === "REVIEW";
+  if (filter === "block") return row.decision === "BLOCK";
+  return row.decision !== "ALLOW";
+}
+
+function mergeAlertPage(
+  current: ScoredTransaction[],
+  pageItems: ScoredTransaction[],
+  offset: number,
+): ScoredTransaction[] {
+  if (offset === 0) {
+    const pageIds = new Set(pageItems.map((row) => row.id));
+    const liveOnly = current.filter((row) => !pageIds.has(row.id));
+    return [...liveOnly, ...pageItems].slice(0, LIVE_CAP);
+  }
+  const seen = new Set(current.map((row) => row.id));
+  return [...current, ...pageItems.filter((row) => !seen.has(row.id))].slice(0, LIVE_CAP);
 }
 
 export function Workspace() {
@@ -84,10 +108,12 @@ export function Workspace() {
   const [alertsEpoch, setAlertsEpoch] = useState(0);
   const [alertsLoaded, setAlertsLoaded] = useState(false);
   const selectedId = useRef<string | null>(null);
+  const alertFilterRef = useRef(alertFilter);
   const histCanvasRef = useRef<HTMLCanvasElement>(null);
   const rateCanvasRef = useRef<HTMLCanvasElement>(null);
   const scoresRef = useRef<number[]>([]);
   const bucketsRef = useRef<RateBucket[]>([]);
+  alertFilterRef.current = alertFilter;
 
   async function loadExplanation(row: ScoredTransaction) {
     selectedId.current = row.id;
@@ -149,8 +175,14 @@ export function Workspace() {
         });
         if (cancelled) return;
         if (result.status === 200 && result.body) {
-          setAlertItems(result.body.items);
-          setAlertTotal(result.body.total);
+          const page = result.body;
+          setAlertItems((current) => {
+            const merged = mergeAlertPage(current, page.items, alertOffset);
+            setAlertTotal(
+              alertOffset === 0 ? Math.max(page.total, merged.length) : page.total,
+            );
+            return merged;
+          });
           setAlertsError(false);
         } else {
           setAlertsError(true);
@@ -190,6 +222,15 @@ export function Workspace() {
       );
       if (histCanvasRef.current) drawHistogram(histCanvasRef.current, scoresRef.current);
       if (rateCanvasRef.current) drawRate(rateCanvasRef.current, bucketsRef.current);
+    }
+
+    function ingestFlaggedAlert(row: ScoredTransaction) {
+      if (!matchesAlertFilter(row, alertFilterRef.current)) return;
+      setAlertItems((current) => {
+        if (current.some((item) => item.id === row.id)) return current;
+        setAlertTotal((total) => total + 1);
+        return [row, ...current].slice(0, LIVE_CAP);
+      });
     }
 
     function scheduleReconnect(
@@ -256,10 +297,7 @@ export function Workspace() {
         const row = JSON.parse(event.data) as ScoredTransaction;
         ingestCharts(row);
         setRows((current) => mergeNewest(current, [row]));
-        if (row.decision !== "ALLOW") {
-          setAlertOffset(0);
-          setAlertsEpoch((n) => n + 1);
-        }
+        if (row.decision !== "ALLOW") ingestFlaggedAlert(row);
         if (!selectedId.current) maybeSelect(row);
       };
       currentSocket.onclose = () =>
@@ -318,7 +356,8 @@ export function Workspace() {
     : cooldown > 0
       ? `Cooldown ${cooldown}s`
       : "Inject Synthetic Burst";
-  const canLoadMore = alertOffset + alertItems.length < alertTotal;
+  const canLoadMore = alertItems.length < alertTotal && alertItems.length < LIVE_CAP;
+  const alertsShown = alertItems.length;
 
   function onAlertSort(column: AlertSort) {
     if (column === alertSort) {
@@ -386,7 +425,7 @@ export function Workspace() {
           <div className="feed-panel">
             <div className="panel-header">
               <h2>Live transaction feed</h2>
-              <span className="panel-meta">capped at 50 · newest first</span>
+              <span className="panel-meta">capped at {LIVE_CAP} · newest first</span>
             </div>
             <div className="feed-list" role="log" aria-live="polite" aria-label="Live transaction feed">
               {rows.length > 0 ? (
@@ -436,36 +475,71 @@ export function Workspace() {
 
         <div className="explain-panel">
           <div className="panel-header">
-            <h2>Explainability</h2>
+            <div className="explain-title">
+              <h2>Explainability</h2>
+              <button
+                type="button"
+                className="tip-btn"
+                aria-label="What explainability shows"
+                aria-describedby="explain-tooltip"
+              >
+                i
+              </button>
+              <span id="explain-tooltip" role="tooltip" className="tip-bubble">
+                {EXPLAIN_TIP}
+              </span>
+            </div>
+            {selected ? (
+              <span className="panel-meta">
+                ${selected.amount.toFixed(2)} · {formatTime(selected.occurred_at)}
+              </span>
+            ) : null}
           </div>
           <div className="explain-body" data-testid="explain-body">
             {selected ? (
               <>
+                <div className="explain-decision">
+                  <span className={`badge ${BADGE[selected.decision]}`}>
+                    {DECISION_LABEL[selected.decision]}
+                  </span>
+                </div>
                 <p className="explain-meta">
-                  score <span className="num">{selected.model_score.toFixed(2)}</span>
+                  score <span className="num">{selected.model_score.toFixed(3)}</span>
+                  {" · "}
+                  {accountChrome(selected.id).line}
+                  <br />
+                  feature contribution to risk score
                 </p>
                 {explaining ? (
                   <div data-testid="explain-skeleton">
-                    {Array.from({ length: 5 }, (_, index) => (
-                      <div key={index} className="skeleton-bar" />
+                    {["70%", "55%", "80%", "40%"].map((width) => (
+                      <div key={width} className="skeleton-bar" style={{ width }} />
                     ))}
                   </div>
                 ) : (
                   <ul>
                     {explanation.map((item) => {
-                      const max = Math.max(...explanation.map((row) => row.contribution), 1e-9);
-                      const width = `${Math.round((item.contribution / max) * 100)}%`;
+                      const max = Math.max(
+                        ...explanation.map((row) => Math.abs(row.contribution)),
+                        1e-9,
+                      );
+                      const width = `${Math.round((Math.abs(item.contribution) / max) * 50)}%`;
+                      const side = item.contribution >= 0 ? "pos" : "neg";
+                      const signed =
+                        item.contribution >= 0
+                          ? `+${item.contribution.toFixed(3)}`
+                          : item.contribution.toFixed(3);
                       return (
                         <li key={item.feature} className="feature-row">
                           <div className="feature-name">
                             <span>{item.feature}</span>
-                            <span className="val">{item.contribution.toFixed(2)}</span>
+                            <span className="val">{signed}</span>
                           </div>
                           <div className="feature-track">
                             <div
                               data-testid="explain-bar"
-                              className="feature-fill pos"
-                              style={{ width, left: 0 }}
+                              className={`feature-fill ${side}`}
+                              style={{ width }}
                             />
                           </div>
                         </li>
@@ -493,6 +567,10 @@ export function Workspace() {
             </div>
             <div className="chart-body">
               <canvas ref={histCanvasRef} data-testid="score-hist" width={640} height={160} />
+              <p className="chart-note">
+                Isolation Forest scores from 0 to 1. Blue is below 0.40 (Approved), amber is the
+                Review band, red is Block. Dotted lines mark the 0.40 / 0.60 / 0.90 thresholds.
+              </p>
             </div>
           </div>
           <div className="chart-panel">
@@ -502,6 +580,10 @@ export function Workspace() {
             </div>
             <div className="chart-body">
               <canvas ref={rateCanvasRef} data-testid="fraud-rate" width={640} height={160} />
+              <p className="chart-note">
+                Share of Review and Blocked transactions in each 10-second bucket over the last 10
+                minutes. Spikes are burst traffic or a cluster of high scores.
+              </p>
             </div>
           </div>
         </div>
@@ -509,82 +591,98 @@ export function Workspace() {
         <div className="alerts-panel">
           <div className="panel-header">
             <h2>Alerts — case review</h2>
-            <select
-              className="alerts-filter"
-              aria-label="Alert filter"
-              value={alertFilter}
-              onChange={(event) => {
-                setAlertFilter(event.target.value as AlertFilter);
-                setAlertOffset(0);
-              }}
-            >
-              <option value="all">All flagged</option>
-              <option value="review">Review only</option>
-              <option value="block">Blocked only</option>
-            </select>
-          </div>
-          <table className="alerts-table">
-            <thead>
-              <tr>
-                {SORT_HEADERS.flatMap((header) => {
-                  const cell = (
-                    <th key={header.key} scope="col" onClick={() => onAlertSort(header.key)}>
-                      <button type="button">{header.label}</button>
-                    </th>
-                  );
-                  if (header.key !== "created_at") return [cell];
-                  return [
-                    cell,
-                    <th key="source-ip" scope="col" className="alerts-source-ip">
-                      Source IP
-                    </th>,
-                  ];
-                })}
-              </tr>
-            </thead>
-            <tbody>
-              {alertItems.length > 0 ? (
-                alertItems.map((row) => (
-                  <tr
-                    key={row.id}
-                    className={selected?.id === row.id ? "active" : undefined}
-                    onClick={() => void loadExplanation(row)}
-                  >
-                    <td className="num">{formatTime(row.occurred_at)}</td>
-                    <td className="num">{accountChrome(row.id).ip}</td>
-                    <td className="num">${row.amount.toFixed(2)}</td>
-                    <td className="num">{row.model_score.toFixed(2)}</td>
-                    <td>
-                      <span className={`badge ${BADGE[row.decision]}`}>
-                        {DECISION_LABEL[row.decision]}
-                      </span>
-                    </td>
-                  </tr>
-                ))
-              ) : (
-                <tr>
-                  <td colSpan={5} className="alerts-empty">
-                    {alertsError ? null : "No flagged transactions yet"}
-                  </td>
-                </tr>
-              )}
-            </tbody>
-          </table>
-          <div className="alerts-footer">
-            {alertsLoaded ? (
-              <button
-                type="button"
-                disabled={!canLoadMore}
-                onClick={() => setAlertOffset((current) => current + 10)}
+            <div className="alerts-controls">
+              <span className="panel-meta">capped at {LIVE_CAP} · newest first</span>
+              <label htmlFor="alerts-filter">Filter</label>
+              <select
+                id="alerts-filter"
+                className="alerts-filter"
+                aria-label="Alert filter"
+                value={alertFilter}
+                onChange={(event) => {
+                  setAlertFilter(event.target.value as AlertFilter);
+                  setAlertOffset(0);
+                }}
               >
-                Load more
-              </button>
-            ) : null}
-            {alertsError ? (
-              <button type="button" onClick={() => setAlertsEpoch((n) => n + 1)}>
-                Retry
-              </button>
-            ) : null}
+                <option value="all">All flagged</option>
+                <option value="review">Review only</option>
+                <option value="block">Blocked only</option>
+              </select>
+            </div>
+          </div>
+          <div className="alerts-table-wrap">
+            <table className="alerts-table">
+              <thead>
+                <tr>
+                  {SORT_HEADERS.flatMap((header) => {
+                    const arrow =
+                      alertSort === header.key ? (alertDir === "asc" ? " ↑" : " ↓") : "";
+                    const cell = (
+                      <th key={header.key} scope="col" onClick={() => onAlertSort(header.key)}>
+                        <button type="button">
+                          {header.label}
+                          <span className="arrow">{arrow}</span>
+                        </button>
+                      </th>
+                    );
+                    if (header.key !== "created_at") return [cell];
+                    return [
+                      cell,
+                      <th key="source-ip" scope="col" className="alerts-source-ip">
+                        Source IP
+                      </th>,
+                    ];
+                  })}
+                </tr>
+              </thead>
+              <tbody>
+                {alertItems.length > 0 ? (
+                  alertItems.map((row) => (
+                    <tr
+                      key={row.id}
+                      className={selected?.id === row.id ? "clickable active" : "clickable"}
+                      onClick={() => void loadExplanation(row)}
+                    >
+                      <td className="num">{formatTime(row.occurred_at)}</td>
+                      <td className="num">{accountChrome(row.id).ip}</td>
+                      <td className="amt">${row.amount.toFixed(2)}</td>
+                      <td className="score">{row.model_score.toFixed(2)}</td>
+                      <td>
+                        <span className={`badge ${BADGE[row.decision]}`}>
+                          {DECISION_LABEL[row.decision]}
+                        </span>
+                      </td>
+                    </tr>
+                  ))
+                ) : (
+                  <tr className="alerts-empty">
+                    <td colSpan={5}>{alertsError ? null : "No flagged transactions yet"}</td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+          <div className="alerts-footer">
+            <span data-testid="alerts-shown">
+              Showing <span className="num">{alertsShown}</span> of{" "}
+              <span className="num">{alertTotal}</span>
+            </span>
+            <div className="alerts-footer-actions">
+              {alertsLoaded ? (
+                <button
+                  type="button"
+                  disabled={!canLoadMore}
+                  onClick={() => setAlertOffset((current) => current + 10)}
+                >
+                  Load more
+                </button>
+              ) : null}
+              {alertsError ? (
+                <button type="button" onClick={() => setAlertsEpoch((n) => n + 1)}>
+                  Retry
+                </button>
+              ) : null}
+            </div>
           </div>
         </div>
       </div>
