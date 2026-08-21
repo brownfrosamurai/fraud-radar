@@ -19,6 +19,7 @@
   --block-dim: #7d332c;
   --accent: #3ec6ff;
   --accent-dim: #1c5b73;
+  --list-body-height: 420px;
   --font-display: "Archivo", "Arial Narrow", sans-serif;
   --font-label: "IBM Plex Sans", "Segoe UI", sans-serif;
   --font-data: "IBM Plex Mono", "SF Mono", Consolas, monospace;
@@ -335,7 +336,7 @@ button {
 }
 
 .feed-list {
-  height: 420px;
+  height: var(--list-body-height);
   overflow-y: auto;
   padding: 4px;
 }
@@ -366,6 +367,18 @@ button {
   color: var(--text);
   text-align: left;
   font-size: 12px;
+  animation: rowIn 0.28s ease;
+}
+
+@keyframes rowIn {
+  from {
+    opacity: 0;
+    transform: translateY(-3px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 
 .feed-row:last-child {
@@ -459,10 +472,60 @@ button.feed-row:hover {
   background: var(--block);
 }
 
-.explain-panel {
+.explain-panel .panel-header {
+  align-items: center;
+}
+
+.explain-title {
   display: flex;
-  flex-direction: column;
-  min-height: 0;
+  align-items: center;
+  gap: 8px;
+  position: relative;
+}
+
+.tip-btn {
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  border-radius: 50%;
+  border: 1px solid var(--border-strong);
+  background: none;
+  color: var(--text-faint);
+  font-size: 10px;
+  font-weight: 600;
+  font-family: var(--font-label);
+  line-height: 1;
+  cursor: help;
+}
+
+.tip-btn:hover,
+.tip-btn:focus-visible {
+  color: var(--text);
+  border-color: var(--text-faint);
+}
+
+.tip-bubble {
+  display: none;
+  position: absolute;
+  top: calc(100% + 8px);
+  left: 0;
+  z-index: 6;
+  width: 268px;
+  padding: 10px 12px;
+  background: var(--bg-raised);
+  border: 1px solid var(--border-strong);
+  border-radius: 3px;
+  color: var(--text-dim);
+  font-size: 11px;
+  font-weight: 400;
+  letter-spacing: 0;
+  line-height: 1.55;
+  text-transform: none;
+}
+
+.tip-btn:hover + .tip-bubble,
+.tip-btn:focus-visible + .tip-bubble {
+  display: block;
 }
 
 .explain-body {
@@ -482,6 +545,11 @@ button.feed-row:hover {
   font-size: 12.5px;
   line-height: 1.6;
   margin: 40px 0 0;
+}
+
+.explain-decision {
+  display: inline-block;
+  margin-bottom: 4px;
 }
 
 .explain-meta {
@@ -543,10 +611,27 @@ button.feed-row:hover {
   top: 0;
   bottom: 0;
   border-radius: 3px;
+  transition: width 0.4s ease;
 }
 
 .feature-fill.pos {
   background: var(--block);
+  left: 50%;
+}
+
+.feature-fill.neg {
+  background: var(--allow);
+  right: 50%;
+}
+
+.feature-track::before {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: var(--border-strong);
 }
 
 .secondary-zone {
@@ -568,21 +653,47 @@ button.feed-row:hover {
 }
 
 .chart-body {
-  padding: 12px 16px;
+  padding: 12px 16px 14px;
+}
+
+.chart-note {
+  margin: 10px 2px 0;
+  font-size: 11px;
+  line-height: 1.55;
+  color: var(--text-faint);
+}
+
+.alerts-controls {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.alerts-controls label {
+  font-size: 10.5px;
+  color: var(--text-faint);
+  margin-right: 6px;
 }
 
 .alerts-filter {
   background: var(--bg-raised);
   color: var(--text);
-  border: 1px solid var(--border);
+  border: 1px solid var(--border-strong);
   border-radius: 3px;
-  font-size: 12px;
+  font-size: 11px;
   padding: 4px 8px;
+  font-family: var(--font-label);
+}
+
+.alerts-table-wrap {
+  height: var(--list-body-height);
+  overflow: auto;
 }
 
 .alerts-table {
   width: 100%;
   border-collapse: collapse;
+  font-size: 12px;
 }
 
 .alerts-table th,
@@ -595,50 +706,78 @@ button.feed-row:hover {
 
 .alerts-table th {
   padding: 0;
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+  user-select: none;
+  font-family: var(--font-label);
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--bg);
+}
+
+.alerts-table th:hover {
+  color: var(--text);
 }
 
 .alerts-table th.alerts-source-ip {
-  padding: 8px 16px;
-  color: var(--text-faint);
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  font-size: 10.5px;
-  font-weight: 600;
+  padding: 9px 16px;
   cursor: default;
+}
+
+.alerts-table th.alerts-source-ip:hover {
+  color: var(--text-faint);
 }
 
 .alerts-table th button {
   background: none;
   border: none;
-  color: var(--text-faint);
+  color: inherit;
   font: inherit;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  font-size: 10.5px;
-  font-weight: 600;
+  letter-spacing: inherit;
+  text-transform: inherit;
+  font-size: inherit;
+  font-weight: inherit;
   cursor: pointer;
-  padding: 8px 16px;
+  padding: 9px 16px;
   width: 100%;
   text-align: left;
 }
 
-.alerts-table tbody tr {
+.alerts-table th .arrow {
+  margin-left: 4px;
+  opacity: 0.6;
+}
+
+.alerts-table td.amt,
+.alerts-table td.score {
+  font-family: var(--font-data);
+  font-variant-numeric: tabular-nums;
+}
+
+.alerts-table tbody tr.clickable {
   cursor: pointer;
 }
 
-.alerts-table tbody tr:hover {
+.alerts-table tbody tr.clickable:hover td {
   background: var(--bg-hover);
 }
 
-.alerts-table tbody tr.active {
+.alerts-table tbody tr.active td {
   background: var(--bg-raised);
+}
+
+.alerts-table tbody tr.active {
   box-shadow: inset 2px 0 0 var(--accent);
 }
 
-.alerts-empty {
+tr.alerts-empty td {
   color: var(--text-faint);
   font-size: 12.5px;
-  padding: 24px 16px;
+  padding: 26px 16px;
   text-align: center;
   cursor: default;
 }
@@ -646,22 +785,37 @@ button.feed-row:hover {
 .alerts-footer {
   display: flex;
   align-items: center;
+  justify-content: space-between;
   gap: 12px;
   padding: 10px 16px;
+  font-size: 11px;
+  color: var(--text-faint);
+}
+
+.alerts-footer-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
 }
 
 .alerts-footer button {
-  background: var(--bg-raised);
-  color: var(--text);
+  background: none;
+  color: var(--text-dim);
   border: 1px solid var(--border-strong);
   border-radius: 3px;
-  font-size: 12px;
-  padding: 6px 12px;
+  font-size: 11px;
+  padding: 5px 12px;
   cursor: pointer;
 }
 
+.alerts-footer button:hover:not(:disabled) {
+  color: var(--text);
+  border-color: var(--text-faint);
+}
+
 .alerts-footer button:disabled {
-  color: var(--text-faint);
+  opacity: 0.4;
   cursor: not-allowed;
 }
 
@@ -669,7 +823,10 @@ button.feed-row:hover {
   .radar-icon::before,
   .conn-status .dot,
   .feed-empty .pulse-row,
-  .skeleton-bar {
+  .skeleton-bar,
+  .feed-row,
+  .feature-fill {
     animation: none !important;
+    transition: none !important;
   }
 }
