@@ -10,7 +10,7 @@ from fastapi import FastAPI
 from api.burst import BURST_SIZE, BURST_WINDOW_MS, load_burst_rows
 from api.schemas import ScoreRequest
 from streaming.publisher import TOPIC, KafkaPublisher, Publisher
-from streaming.replay import load_replay_rows, replay_loop, spread_publish
+from streaming.replay import REPLAY_RATE_PER_SEC, load_replay_rows, replay_loop, spread_publish
 
 logger = logging.getLogger(__name__)
 
@@ -65,7 +65,7 @@ def create_app() -> FastAPI:
                         rows=rows,
                         publish=publish,
                         sleep_fn=time.sleep,
-                        rate_per_sec=10.0,
+                        rate_per_sec=REPLAY_RATE_PER_SEC,
                     )
                 except Exception:
                     logger.exception("replay publish failed; retrying")

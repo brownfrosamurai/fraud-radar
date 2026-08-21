@@ -1,7 +1,8 @@
-from datetime import datetime
+from datetime import datetime, timedelta
 from uuid import UUID
 
-from sqlalchemy import select
+import numpy as np
+from sqlalchemy import func, select
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session
 
@@ -15,7 +16,22 @@ from api.schemas import (
     ScoredTransaction,
     StatsResponse,
 )
-from api.store import LIST_CAP, list_alerts_from_rows, stats_from_rows
+from api.store import FLAGGED, LATENCY_WINDOW, LIST_CAP, THROUGHPUT_WINDOW_S
+
+_ALERT_SORT = {
+    "created_at": ScoredTransactionRow.created_at,
+    "amount": ScoredTransactionRow.amount,
+    "model_score": ScoredTransactionRow.model_score,
+    "decision": ScoredTransactionRow.decision,
+}
+
+
+def _alerts_where(filter: AlertFilter):
+    if filter == "review":
+        return ScoredTransactionRow.decision == "REVIEW"
+    if filter == "block":
+        return ScoredTransactionRow.decision == "BLOCK"
+    return ScoredTransactionRow.decision.in_(tuple(FLAGGED))
 
 
 def _to_orm(row: ScoredTransaction) -> ScoredTransactionRow:
@@ -82,7 +98,46 @@ class PostgresStore:
             return [_from_orm(row) for row in session.scalars(stmt)]
 
     def stats(self, *, now: datetime) -> StatsResponse:
-        return stats_from_rows(self._load_all(), now=now)
+        cutoff = now - timedelta(seconds=THROUGHPUT_WINDOW_S)
+        with Session(self._engine) as session:
+            processed = session.scalar(select(func.count()).select_from(ScoredTransactionRow)) or 0
+            flagged = (
+                session.scalar(
+                    select(func.count())
+                    .select_from(ScoredTransactionRow)
+                    .where(ScoredTransactionRow.decision.in_(tuple(FLAGGED)))
+                )
+                or 0
+            )
+            recent = (
+                session.scalar(
+                    select(func.count())
+                    .select_from(ScoredTransactionRow)
+                    .where(ScoredTransactionRow.created_at >= cutoff)
+                )
+                or 0
+            )
+            timed = list(
+                session.scalars(
+                    select(ScoredTransactionRow.scoring_ms)
+                    .where(ScoredTransactionRow.scoring_ms.is_not(None))
+                    .order_by(ScoredTransactionRow.created_at.desc())
+                    .limit(LATENCY_WINDOW)
+                )
+            )
+        values = [int(ms) for ms in timed if ms is not None]
+        p50: int | None = None
+        p95: int | None = None
+        if values:
+            p50 = int(round(float(np.percentile(values, 50))))
+            p95 = int(round(float(np.percentile(values, 95))))
+        return StatsResponse(
+            processed=processed,
+            throughput_tx_per_s=recent / THROUGHPUT_WINDOW_S,
+            latency_p50_ms=p50,
+            latency_p95_ms=p95,
+            flagged=flagged,
+        )
 
     def list_alerts(
         self,
@@ -93,11 +148,18 @@ class PostgresStore:
         offset: int,
         limit: int,
     ) -> AlertsResponse:
-        return list_alerts_from_rows(
-            self._load_all(),
-            filter=filter,
-            sort=sort,
-            dir=dir,
-            offset=offset,
-            limit=limit,
-        )
+        where = _alerts_where(filter)
+        column = _ALERT_SORT[sort]
+        order = column.desc() if dir == "desc" else column.asc()
+        with Session(self._engine) as session:
+            total = (
+                session.scalar(
+                    select(func.count()).select_from(ScoredTransactionRow).where(where)
+                )
+                or 0
+            )
+            rows = session.scalars(
+                select(ScoredTransactionRow).where(where).order_by(order).offset(offset).limit(limit)
+            )
+            items = [_from_orm(row) for row in rows]
+        return AlertsResponse(items=items, total=total, offset=offset, limit=limit)

@@ -147,6 +147,59 @@ def test_list_alerts_filter_review_only() -> None:
     assert page.items[0].decision == "REVIEW"
 
 
+def test_postgres_list_alerts_does_not_load_all_rows(monkeypatch: pytest.MonkeyPatch) -> None:
+    engine = create_engine("sqlite:///:memory:")
+    create_tables(engine)
+    store = PostgresStore(engine)
+    allow = _row().model_copy(update={"decision": "ALLOW", "amount": 1.0})
+    review = _row().model_copy(update={"decision": "REVIEW", "amount": 10.0, "model_score": 0.5})
+    block = _row().model_copy(update={"decision": "BLOCK", "amount": 90.0, "model_score": 0.95})
+    store.put_many([allow, review, block])
+    def boom_alerts() -> list:
+        raise AssertionError("list_alerts must not hydrate the full table")
+
+    monkeypatch.setattr(store, "_load_all", boom_alerts)
+    page = store.list_alerts(filter="all", sort="amount", dir="desc", offset=0, limit=1)
+    assert page.total == 2
+    assert page.limit == 1
+    assert page.items[0].id == block.id
+    assert page.items[0].decision == "BLOCK"
+    review_only = store.list_alerts(filter="review", sort="created_at", dir="desc", offset=0, limit=10)
+    assert review_only.total == 1
+    assert review_only.items[0].id == review.id
+
+
+def test_postgres_stats_does_not_load_all_rows(monkeypatch: pytest.MonkeyPatch) -> None:
+    engine = create_engine("sqlite:///:memory:")
+    create_tables(engine)
+    store = PostgresStore(engine)
+    now = datetime(2026, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
+    store.put_many(
+        [
+            _row().model_copy(
+                update={"created_at": now - timedelta(seconds=6), "decision": "ALLOW", "scoring_ms": 4}
+            ),
+            _row().model_copy(
+                update={
+                    "created_at": now - timedelta(seconds=1),
+                    "decision": "BLOCK",
+                    "model_score": 0.95,
+                    "scoring_ms": 8,
+                }
+            ),
+        ]
+    )
+    def boom_stats() -> list:
+        raise AssertionError("stats must not hydrate the full table")
+
+    monkeypatch.setattr(store, "_load_all", boom_stats)
+    snap = store.stats(now=now)
+    assert snap.processed == 2
+    assert snap.flagged == 1
+    assert snap.throughput_tx_per_s == pytest.approx(1 / 5)
+    assert snap.latency_p50_ms is not None
+
+
 def test_scoring_ms_excluded_from_json() -> None:
     row = _row().model_copy(update={"scoring_ms": 42})
     dumped = row.model_dump(mode="json")

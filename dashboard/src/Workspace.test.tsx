@@ -1,6 +1,7 @@
 import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
+import { accountChrome } from "./account";
 import { Workspace } from "./Workspace";
 
 const scored = {
@@ -159,7 +160,8 @@ test("renders a live row from the websocket", async () => {
   render(<Workspace />);
   await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
   act(() => FakeWebSocket.instances[0].emit(scored));
-  expect(await screen.findByText("ALLOW")).toBeInTheDocument();
+  expect(await screen.findByText("Approved")).toBeInTheDocument();
+  expect(screen.getByText(accountChrome(scored.id).line)).toBeInTheDocument();
   expect(within(screen.getByTestId("explain-body")).queryByText("Amount")).not.toBeInTheDocument();
 });
 
@@ -353,4 +355,13 @@ test("clicking an alert row opens explanation", async () => {
   render(<Workspace />);
   await user.click(await screen.findByText("$777.00"));
   expect(await screen.findAllByTestId("explain-bar")).not.toHaveLength(0);
+});
+
+test("alerts table shows Source IP from account chrome", async () => {
+  alertItems = [{ ...scored, id: "alert-1", decision: "BLOCK", amount: 777, model_score: 0.99 }];
+  alertTotal = 1;
+  render(<Workspace />);
+  expect(await screen.findByRole("columnheader", { name: /source ip/i })).toBeInTheDocument();
+  expect(screen.getByText(accountChrome("alert-1").ip)).toBeInTheDocument();
+  expect(screen.getByText("Blocked")).toBeInTheDocument();
 });
