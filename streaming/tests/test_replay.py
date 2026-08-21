@@ -71,3 +71,24 @@ def test_replay_loop_rate_and_wrap() -> None:
     assert all(abs(s - 0.1) < 1e-9 for s in sleeps)
     assert pub.rows[0].transaction_id != rows[0].transaction_id
     assert pub.rows[2].amount == rows[0].amount
+
+
+def test_replay_loop_default_rate_is_one() -> None:
+    rows = [_row()]
+    pub = RecordingPublisher()
+    sleeps: list[float] = []
+    n = {"i": 0}
+
+    def should_continue() -> bool:
+        n["i"] += 1
+        return n["i"] <= 2
+
+    replay_loop(
+        rows,
+        pub,
+        sleep_fn=sleeps.append,
+        should_continue=should_continue,
+        clock=lambda: datetime(2026, 1, 1, tzinfo=timezone.utc),
+    )
+    assert len(sleeps) == 2
+    assert all(abs(s - 1.0) < 1e-9 for s in sleeps)

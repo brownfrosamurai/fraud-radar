@@ -8,6 +8,8 @@ from api.schemas import Features, ScoreRequest
 from streaming.publisher import Publisher
 
 REPLAY_SIZE = 200
+# Background live feed: 1 tx/s (slower than the original 10 tx/s demo pace).
+REPLAY_RATE_PER_SEC = 1.0
 
 
 def load_replay_rows(path: Path) -> list[ScoreRequest]:
@@ -57,7 +59,7 @@ def replay_loop(
     rows: list[ScoreRequest],
     publish: Publisher,
     sleep_fn: Callable[[float], None],
-    rate_per_sec: float = 10.0,
+    rate_per_sec: float = REPLAY_RATE_PER_SEC,
     should_continue: Callable[[], bool] = lambda: True,
     clock: Callable[[], datetime] | None = None,
 ) -> None:

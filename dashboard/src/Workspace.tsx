@@ -11,6 +11,7 @@ import {
   type ScoredTransaction,
   type Stats,
 } from "./api";
+import { accountChrome } from "./account";
 import { drawHistogram, drawRate, pushRate, pushScore, type RateBucket } from "./charts";
 import { nextReconnectDelay } from "./reconnect";
 
@@ -29,6 +30,12 @@ const BADGE: Record<Decision, string> = {
   ALLOW: "allow",
   REVIEW: "review",
   BLOCK: "block",
+};
+
+const DECISION_LABEL: Record<Decision, string> = {
+  ALLOW: "Approved",
+  REVIEW: "Review",
+  BLOCK: "Blocked",
 };
 
 function mergeNewest(
@@ -387,12 +394,16 @@ export function Workspace() {
                   const flagged = row.decision !== "ALLOW";
                   const className =
                     selected?.id === row.id ? "feed-row active" : "feed-row";
+                  const account = accountChrome(row.id);
                   const body = (
                     <>
                       <span className="ts">{formatTime(row.occurred_at)}</span>
+                      <span className="method">{account.line}</span>
                       <span className="amt">${row.amount.toFixed(2)}</span>
                       <span className="score">{row.model_score.toFixed(2)}</span>
-                      <span className={`badge ${BADGE[row.decision]}`}>{row.decision}</span>
+                      <span className={`badge ${BADGE[row.decision]}`}>
+                        {DECISION_LABEL[row.decision]}
+                      </span>
                     </>
                   );
                   if (flagged) {
@@ -515,11 +526,20 @@ export function Workspace() {
           <table className="alerts-table">
             <thead>
               <tr>
-                {SORT_HEADERS.map((header) => (
-                  <th key={header.key} scope="col" onClick={() => onAlertSort(header.key)}>
-                    <button type="button">{header.label}</button>
-                  </th>
-                ))}
+                {SORT_HEADERS.flatMap((header) => {
+                  const cell = (
+                    <th key={header.key} scope="col" onClick={() => onAlertSort(header.key)}>
+                      <button type="button">{header.label}</button>
+                    </th>
+                  );
+                  if (header.key !== "created_at") return [cell];
+                  return [
+                    cell,
+                    <th key="source-ip" scope="col" className="alerts-source-ip">
+                      Source IP
+                    </th>,
+                  ];
+                })}
               </tr>
             </thead>
             <tbody>
@@ -531,16 +551,19 @@ export function Workspace() {
                     onClick={() => void loadExplanation(row)}
                   >
                     <td className="num">{formatTime(row.occurred_at)}</td>
+                    <td className="num">{accountChrome(row.id).ip}</td>
                     <td className="num">${row.amount.toFixed(2)}</td>
                     <td className="num">{row.model_score.toFixed(2)}</td>
                     <td>
-                      <span className={`badge ${BADGE[row.decision]}`}>{row.decision}</span>
+                      <span className={`badge ${BADGE[row.decision]}`}>
+                        {DECISION_LABEL[row.decision]}
+                      </span>
                     </td>
                   </tr>
                 ))
               ) : (
                 <tr>
-                  <td colSpan={4} className="alerts-empty">
+                  <td colSpan={5} className="alerts-empty">
                     {alertsError ? null : "No flagged transactions yet"}
                   </td>
                 </tr>
