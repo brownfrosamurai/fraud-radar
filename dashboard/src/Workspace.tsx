@@ -667,6 +667,14 @@ export function Workspace() {
                       </td>
                     </tr>
                   ))
+                ) : !alertsLoaded && !alertsError ? (
+                  <tr className="alerts-empty" data-testid="alerts-skeleton">
+                    <td colSpan={5}>
+                      {["70%", "55%", "80%", "40%"].map((width) => (
+                        <div key={width} className="skeleton-bar" style={{ width }} />
+                      ))}
+                    </td>
+                  </tr>
                 ) : (
                   <tr className="alerts-empty">
                     <td colSpan={5}>{alertsError ? null : "No flagged transactions yet"}</td>

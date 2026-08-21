@@ -2,7 +2,13 @@
 
 `demo.gif` is a screen capture of `http://localhost:3000` after `docker compose up --build`.
 
-Beats: idle feed → burst 50/2s → stats/charts move → flagged row → permutation bars.
+Beats:
+
+1. Idle feed moving
+2. Burst 50/2s, then cooldown
+3. Stats + charts move
+4. Click a flagged row → bipolar bars, hover/focus the **i** tooltip
+5. Alerts footer: `Showing 1–50 of N` with Next enabled, click Next, click Previous
 
 Encode from a 1280px-wide recording:
 

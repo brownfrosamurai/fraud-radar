@@ -60,6 +60,7 @@ let explainGate: Promise<void> | null = null;
 let lastAlertsUrl = "";
 let alertItems: typeof scored[] = [];
 let alertTotal = 0;
+let alertsGate: Promise<void> | null = null;
 
 beforeEach(() => {
   FakeWebSocket.instances = [];
@@ -75,6 +76,7 @@ beforeEach(() => {
   lastAlertsUrl = "";
   alertItems = [];
   alertTotal = 0;
+  alertsGate = null;
   vi.stubGlobal("WebSocket", FakeWebSocket);
   vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue(null);
   vi.stubGlobal(
@@ -108,6 +110,7 @@ beforeEach(() => {
       }
       if (url.includes("/alerts")) {
         lastAlertsUrl = url;
+        if (alertsGate) await alertsGate;
         const parsed = new URL(url, "http://local.test");
         const offset = Number(parsed.searchParams.get("offset") || "0");
         const limit = Number(parsed.searchParams.get("limit") || "50");
@@ -450,4 +453,43 @@ test("alerts table shows Source IP from account chrome", async () => {
   expect(await screen.findByRole("columnheader", { name: /source ip/i })).toBeInTheDocument();
   expect(screen.getByText(accountChrome("alert-1").ip)).toBeInTheDocument();
   expect(screen.getByText("Blocked")).toBeInTheDocument();
+});
+
+test("shows alerts skeleton while the first request is in flight", async () => {
+  let release!: () => void;
+  alertsGate = new Promise((resolve) => {
+    release = resolve;
+  });
+  alertItems = [{ ...scored, id: "alert-1", decision: "BLOCK", amount: 777, model_score: 0.99 }];
+  alertTotal = 1;
+  render(<Workspace />);
+  expect(await screen.findByTestId("alerts-skeleton")).toBeInTheDocument();
+  act(() => release());
+  expect(await screen.findByText("$777.00")).toBeInTheDocument();
+  expect(screen.queryByTestId("alerts-skeleton")).not.toBeInTheDocument();
+});
+
+test("empty alerts list shows copy, not skeleton, once loaded", async () => {
+  render(<Workspace />);
+  expect(await screen.findByText("No flagged transactions yet")).toBeInTheDocument();
+  expect(screen.queryByTestId("alerts-skeleton")).not.toBeInTheDocument();
+});
+
+test("clicking Next does not flash the alerts skeleton", async () => {
+  const user = userEvent.setup();
+  alertItems = makeAlerts(80);
+  alertTotal = 80;
+  render(<Workspace />);
+  await screen.findByTestId("alerts-shown");
+
+  let release!: () => void;
+  alertsGate = new Promise((resolve) => {
+    release = resolve;
+  });
+  await user.click(screen.getByRole("button", { name: /next 50 alerts/i }));
+  expect(screen.queryByTestId("alerts-skeleton")).not.toBeInTheDocument();
+  expect(screen.getByText("$100.00")).toBeInTheDocument();
+  act(() => release());
+  expect(await screen.findByTestId("alerts-shown")).toHaveTextContent("Showing 51–80 of 80");
+  expect(screen.queryByTestId("alerts-skeleton")).not.toBeInTheDocument();
 });
