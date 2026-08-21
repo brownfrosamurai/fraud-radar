@@ -108,13 +108,12 @@ beforeEach(() => {
       }
       if (url.includes("/alerts")) {
         lastAlertsUrl = url;
-        const offset = Number(new URL(url, "http://local.test").searchParams.get("offset") || "0");
-        const items =
-          offset === 0
-            ? alertItems
-            : alertItems.map((row, index) => ({ ...row, id: `${row.id}-p${offset}-${index}` }));
+        const parsed = new URL(url, "http://local.test");
+        const offset = Number(parsed.searchParams.get("offset") || "0");
+        const limit = Number(parsed.searchParams.get("limit") || "50");
+        const items = alertItems.slice(offset, offset + limit);
         return new Response(
-          JSON.stringify({ items, total: alertTotal, offset, limit: 10 }),
+          JSON.stringify({ items, total: alertTotal, offset, limit }),
           { status: 200 },
         );
       }
@@ -345,6 +344,16 @@ test("feed scores fill the histogram canvas", async () => {
   expect(screen.getByTestId("fraud-rate")).toBeInTheDocument();
 });
 
+function makeAlerts(count: number) {
+  return Array.from({ length: count }, (_, index) => ({
+    ...scored,
+    id: `alert-${index}`,
+    decision: "REVIEW" as const,
+    amount: 100 + index,
+    model_score: 0.5,
+  }));
+}
+
 test("alert header click sorts by amount desc and resets offset", async () => {
   const user = userEvent.setup();
   alertItems = [{ ...scored, decision: "BLOCK", amount: 900, model_score: 0.95 }];
@@ -356,23 +365,31 @@ test("alert header click sorts by amount desc and resets offset", async () => {
   expect(lastAlertsUrl).toMatch(/offset=0/);
 });
 
-test("load more increases offset", async () => {
+test("next page fetches the following 50 alerts and previous returns", async () => {
   const user = userEvent.setup();
-  alertItems = [{ ...scored, decision: "REVIEW", amount: 80, model_score: 0.5 }];
-  alertTotal = 25;
+  alertItems = makeAlerts(80);
+  alertTotal = 80;
   render(<Workspace />);
-  expect(await screen.findByTestId("alerts-shown")).toHaveTextContent("Showing 1 of 25");
-  await user.click(await screen.findByRole("button", { name: /load more/i }));
-  expect(lastAlertsUrl).toMatch(/offset=10/);
+  expect(await screen.findByTestId("alerts-shown")).toHaveTextContent("Showing 1–50 of 80");
+  expect(screen.getByRole("button", { name: /previous 50 alerts/i })).toBeDisabled();
+  await user.click(screen.getByRole("button", { name: /next 50 alerts/i }));
+  expect(lastAlertsUrl).toMatch(/offset=50/);
+  expect(lastAlertsUrl).toMatch(/limit=50/);
+  expect(await screen.findByTestId("alerts-shown")).toHaveTextContent("Showing 51–80 of 80");
+  expect(screen.getByText("$150.00")).toBeInTheDocument();
+  expect(screen.queryByText("$100.00")).not.toBeInTheDocument();
+  await user.click(screen.getByRole("button", { name: /previous 50 alerts/i }));
+  expect(lastAlertsUrl).toMatch(/offset=0/);
+  expect(await screen.findByTestId("alerts-shown")).toHaveTextContent("Showing 1–50 of 80");
 });
 
-test("alerts footer keeps Load more on the right of the shown count", async () => {
-  alertItems = [{ ...scored, decision: "REVIEW", amount: 80, model_score: 0.5 }];
-  alertTotal = 25;
+test("alerts footer keeps Next on the right of the shown count", async () => {
+  alertItems = makeAlerts(80);
+  alertTotal = 80;
   render(<Workspace />);
   const shown = await screen.findByTestId("alerts-shown");
-  const loadMore = screen.getByRole("button", { name: /load more/i });
-  expect(shown.compareDocumentPosition(loadMore) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  const next = screen.getByRole("button", { name: /next 50 alerts/i });
+  expect(shown.compareDocumentPosition(next) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
 });
 
 test("clicking an alert row opens explanation", async () => {
@@ -396,26 +413,34 @@ test("flagged websocket row prepends to alerts without refetching", async () => 
     .mocked(fetch)
     .mock.calls.filter(([input]) => String(input).includes("/alerts")).length;
   act(() => FakeWebSocket.instances[0].emit(blocked));
-  expect(await screen.findByTestId("alerts-shown")).toHaveTextContent("Showing 1 of 1");
+  expect(await screen.findByTestId("alerts-shown")).toHaveTextContent("Showing 1–1 of 1");
   expect(screen.getAllByText("$900.00").length).toBeGreaterThan(1);
   expect(
     vi.mocked(fetch).mock.calls.filter(([input]) => String(input).includes("/alerts")),
   ).toHaveLength(fetchesBefore);
 });
 
-test("alerts table is capped at 50 like the live feed", async () => {
-  alertItems = Array.from({ length: 50 }, (_, index) => ({
-    ...scored,
-    id: `alert-cap-${index}`,
-    decision: "REVIEW" as const,
-    amount: 100 + index,
-    model_score: 0.5,
-  }));
+test("alerts table pages 50 at a time instead of capping the whole list", async () => {
+  alertItems = makeAlerts(80);
   alertTotal = 80;
   render(<Workspace />);
-  expect(await screen.findByTestId("alerts-shown")).toHaveTextContent("Showing 50 of 80");
-  expect(screen.getByRole("button", { name: /load more/i })).toBeDisabled();
-  expect(screen.getAllByText(/capped at 50/i).length).toBeGreaterThanOrEqual(2);
+  expect(await screen.findByTestId("alerts-shown")).toHaveTextContent("Showing 1–50 of 80");
+  expect(screen.getByRole("button", { name: /next 50 alerts/i })).toBeEnabled();
+  expect(screen.getByRole("button", { name: /previous 50 alerts/i })).toBeDisabled();
+  expect(screen.getByText(/50 per page/i)).toBeInTheDocument();
+});
+
+test("live alerts stay on page one and only bump the total on later pages", async () => {
+  const user = userEvent.setup();
+  alertItems = makeAlerts(80);
+  alertTotal = 80;
+  render(<Workspace />);
+  await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
+  await user.click(await screen.findByRole("button", { name: /next 50 alerts/i }));
+  expect(await screen.findByTestId("alerts-shown")).toHaveTextContent("Showing 51–80 of 80");
+  act(() => FakeWebSocket.instances[0].emit(blocked));
+  expect(await screen.findByTestId("alerts-shown")).toHaveTextContent("Showing 51–80 of 81");
+  expect(within(screen.getByTestId("alerts-table-wrap")).queryByText("$900.00")).not.toBeInTheDocument();
 });
 
 test("alerts table shows Source IP from account chrome", async () => {

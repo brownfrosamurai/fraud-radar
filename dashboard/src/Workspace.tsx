@@ -20,6 +20,7 @@ type AlertSort = "created_at" | "amount" | "model_score" | "decision";
 type AlertDir = "asc" | "desc";
 
 const LIVE_CAP = 50;
+const ALERT_PAGE_SIZE = 50;
 const EXPLAIN_TIP =
   "Permutation importance on Isolation Forest. Each bar is how much the score dropped when that feature was shuffled. Larger bars mattered more for this Review or Block. This is not SHAP.";
 
@@ -78,14 +79,19 @@ function mergeAlertPage(
   current: ScoredTransaction[],
   pageItems: ScoredTransaction[],
   offset: number,
+  filter: AlertFilter,
 ): ScoredTransaction[] {
-  if (offset === 0) {
-    const pageIds = new Set(pageItems.map((row) => row.id));
-    const liveOnly = current.filter((row) => !pageIds.has(row.id));
-    return [...liveOnly, ...pageItems].slice(0, LIVE_CAP);
-  }
-  const seen = new Set(current.map((row) => row.id));
-  return [...current, ...pageItems.filter((row) => !seen.has(row.id))].slice(0, LIVE_CAP);
+  if (offset !== 0) return pageItems.slice(0, ALERT_PAGE_SIZE);
+  const pageIds = new Set(pageItems.map((row) => row.id));
+  const liveOnly = current.filter(
+    (row) => !pageIds.has(row.id) && matchesAlertFilter(row, filter),
+  );
+  return [...liveOnly, ...pageItems].slice(0, ALERT_PAGE_SIZE);
+}
+
+function alertsRangeLabel(offset: number, shown: number, total: number): string {
+  if (total === 0 || shown === 0) return `Showing 0 of ${total}`;
+  return `Showing ${offset + 1}–${offset + shown} of ${total}`;
 }
 
 export function Workspace() {
@@ -109,11 +115,13 @@ export function Workspace() {
   const [alertsLoaded, setAlertsLoaded] = useState(false);
   const selectedId = useRef<string | null>(null);
   const alertFilterRef = useRef(alertFilter);
+  const alertOffsetRef = useRef(alertOffset);
   const histCanvasRef = useRef<HTMLCanvasElement>(null);
   const rateCanvasRef = useRef<HTMLCanvasElement>(null);
   const scoresRef = useRef<number[]>([]);
   const bucketsRef = useRef<RateBucket[]>([]);
   alertFilterRef.current = alertFilter;
+  alertOffsetRef.current = alertOffset;
 
   async function loadExplanation(row: ScoredTransaction) {
     selectedId.current = row.id;
@@ -171,13 +179,13 @@ export function Workspace() {
           sort: alertSort,
           dir: alertDir,
           offset: alertOffset,
-          limit: 10,
+          limit: ALERT_PAGE_SIZE,
         });
         if (cancelled) return;
         if (result.status === 200 && result.body) {
           const page = result.body;
           setAlertItems((current) => {
-            const merged = mergeAlertPage(current, page.items, alertOffset);
+            const merged = mergeAlertPage(current, page.items, alertOffset, alertFilter);
             setAlertTotal(
               alertOffset === 0 ? Math.max(page.total, merged.length) : page.total,
             );
@@ -226,10 +234,14 @@ export function Workspace() {
 
     function ingestFlaggedAlert(row: ScoredTransaction) {
       if (!matchesAlertFilter(row, alertFilterRef.current)) return;
+      if (alertOffsetRef.current !== 0) {
+        setAlertTotal((total) => total + 1);
+        return;
+      }
       setAlertItems((current) => {
         if (current.some((item) => item.id === row.id)) return current;
         setAlertTotal((total) => total + 1);
-        return [row, ...current].slice(0, LIVE_CAP);
+        return [row, ...current].slice(0, ALERT_PAGE_SIZE);
       });
     }
 
@@ -356,8 +368,9 @@ export function Workspace() {
     : cooldown > 0
       ? `Cooldown ${cooldown}s`
       : "Inject Synthetic Burst";
-  const canLoadMore = alertItems.length < alertTotal && alertItems.length < LIVE_CAP;
   const alertsShown = alertItems.length;
+  const canPrev = alertOffset > 0;
+  const canNext = alertOffset + ALERT_PAGE_SIZE < alertTotal;
 
   function onAlertSort(column: AlertSort) {
     if (column === alertSort) {
@@ -592,7 +605,7 @@ export function Workspace() {
           <div className="panel-header">
             <h2>Alerts — case review</h2>
             <div className="alerts-controls">
-              <span className="panel-meta">capped at {LIVE_CAP} · newest first</span>
+              <span className="panel-meta">{ALERT_PAGE_SIZE} per page · newest first</span>
               <label htmlFor="alerts-filter">Filter</label>
               <select
                 id="alerts-filter"
@@ -610,7 +623,7 @@ export function Workspace() {
               </select>
             </div>
           </div>
-          <div className="alerts-table-wrap">
+          <div className="alerts-table-wrap" data-testid="alerts-table-wrap">
             <table className="alerts-table">
               <thead>
                 <tr>
@@ -664,18 +677,30 @@ export function Workspace() {
           </div>
           <div className="alerts-footer">
             <span data-testid="alerts-shown">
-              Showing <span className="num">{alertsShown}</span> of{" "}
-              <span className="num">{alertTotal}</span>
+              {alertsRangeLabel(alertOffset, alertsShown, alertTotal)}
             </span>
             <div className="alerts-footer-actions">
               {alertsLoaded ? (
-                <button
-                  type="button"
-                  disabled={!canLoadMore}
-                  onClick={() => setAlertOffset((current) => current + 10)}
-                >
-                  Load more
-                </button>
+                <>
+                  <button
+                    type="button"
+                    disabled={!canPrev}
+                    aria-label="Previous 50 alerts"
+                    onClick={() =>
+                      setAlertOffset((current) => Math.max(0, current - ALERT_PAGE_SIZE))
+                    }
+                  >
+                    Previous
+                  </button>
+                  <button
+                    type="button"
+                    disabled={!canNext}
+                    aria-label="Next 50 alerts"
+                    onClick={() => setAlertOffset((current) => current + ALERT_PAGE_SIZE)}
+                  >
+                    Next
+                  </button>
+                </>
               ) : null}
               {alertsError ? (
                 <button type="button" onClick={() => setAlertsEpoch((n) => n + 1)}>
